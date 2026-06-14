@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "liturgio-tools"
+version = "0.1.0"
+description = "CLI, scrapers, and loaders for the liturgio MySQL database."
+requires-python = ">=3.11"
+dependencies = [
+    "gabc-tools @ git+https://github.com/drj-chantschool/gabc-tools.git",
+    "sqlalchemy",
+    "mysql-connector-python",
+    "keyring",
+    "requests",
+    "beautifulsoup4",
+    "unidecode",
+    "pandas",
+]
+
+[project.optional-dependencies]
+viz = [
+    "bokeh",
+]
+
+[project.scripts]
+liturgio-tools = "liturgio_tools.cli:main"
+fix-missing-scores = "liturgio_tools.fix_missing_scores:main"
+upload-english-chants = "liturgio_tools.upload_english_chants:main"
+
+[tool.setuptools.packages.find]
+include = ["liturgio_tools*"]

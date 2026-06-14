@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.html
+.venv/
+env/
+.python-version
+*.egg-info/
+.pytest_cache/
+
+# Regenerable translation scrape data
+liturgio_tools/translations/*.json
+liturgio_tools/translations/raw/
