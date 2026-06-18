@@ -10,7 +10,7 @@ Usage:
     python liturgio_tools.py search-chant --incipit TEXT --part PART_CODE
     python liturgio_tools.py get-chant --chant-group-id N [--gregobase-id N]
     python liturgio_tools.py save-english --chant-group-id N --gabc-file PATH --source CODE [--is-exact 0|1] [--notes TEXT] [--derived-from UID]
-    python liturgio_tools.py assign --jurisdiction CODE --part-code CODE --lit-day-id ID --chant-group-id N --authority CODE [--wkday 1-7] [--seq N] [--cycle-sun 0|1|2] [--cycle-wk 0|1]
+    python liturgio_tools.py assign --jurisdiction CODE --part-code CODE --epoch SLUG --chant-group-id N --authority CODE [--wkday 1-7] [--wknum-mod-4 0-3] [--wknum-mod-2 0-1] [--cycle-sun 0|1|2] [--cycle-wk 0|1]
 """
 
 import argparse
@@ -104,11 +104,12 @@ def cmd_lookup_day(args):
 
     engine = get_ro_engine()
     with engine.connect() as conn:
-        # Resolve the liturgical day
+        # Resolve the liturgical day via proper_of_seasons + lit_epoch (epoch model)
         pos = conn.execute(text("""
-            SELECT pos.lit_day_id, ld.title, ld.season, ld.subseason, ld.wknum, ld.seq, ld.lit_rank
+            SELECT pos.lit_day_id, le.title, le.season, le.subseason, le.wknum, le.seq,
+                   pos.cycle_wk, pos.cycle_sun, pos.wkday
             FROM proper_of_seasons pos
-            JOIN liturgical_day ld ON ld.lit_day_id = pos.lit_day_id
+            JOIN lit_epoch le ON le.slug = pos.lit_day_id
             WHERE pos.dt = :dt AND pos.jurisdiction = :jur
         """), {'dt': args.date, 'jur': args.jurisdiction}).fetchone()
 
@@ -122,16 +123,20 @@ def cmd_lookup_day(args):
         subseason  = pos[3]
         wknum      = pos[4]
         seq        = pos[5]
-        lit_rank   = pos[6]
+        cycle_wk   = pos[6]
+        cycle_sun  = pos[7]
+        wkday      = pos[8]
 
         print(f'Date:          {args.date}')
         print(f'Liturgical day: {title} ({lit_day_id})')
         print(f'Season:        {season} / {subseason}  week {wknum}  seq {seq}')
-        if lit_rank:
-            print(f'Rank:          {lit_rank}')
+        print(f'Cycle:         cycle_wk={cycle_wk}  cycle_sun={cycle_sun}  wkday={wkday}')
         print()
 
-        # Fetch existing lit_part_assignments for this day
+        # Fetch existing lit_part_assignments anchored to this day's epoch slug
+        # (using the depth-in-tree approach: match on lit_epoch_slug = lit_day_id
+        # to show direct day-level assignments; callers wanting full resolution
+        # should use query-daily-mass-parts.sql)
         assignments = conn.execute(text("""
             SELECT lpa.assignment_id, lpa.part_id, lpa.chant_group_id,
                    lpa.assignment_authority_code, lpa.notes,
@@ -141,17 +146,11 @@ def cmd_lookup_day(args):
             JOIN service_part sp ON sp.part_id = lpa.part_id
             JOIN chant_group cg ON cg.chant_group_id = lpa.chant_group_id
             WHERE lpa.jurisdiction = :jur
-              AND lpa.season = :season
-              AND lpa.subseason = :subseason
-              AND lpa.wknum = :wknum
-              AND (lpa.seq = :seq OR lpa.seq IS NULL)
+              AND lpa.lit_epoch_slug = :epoch_slug
             ORDER BY sp.display_order
         """), {
             'jur': args.jurisdiction,
-            'season': season,
-            'subseason': subseason,
-            'wknum': wknum,
-            'seq': seq,
+            'epoch_slug': lit_day_id,
         }).fetchall()
 
         # Fetch all PROPER service parts
@@ -195,11 +194,15 @@ def cmd_lookup_day(args):
             'date': args.date,
             'jurisdiction': args.jurisdiction,
             'lit_day_id': lit_day_id,
+            'epoch_slug': lit_day_id,
             'title': title,
             'season': season,
             'subseason': subseason,
             'wknum': wknum,
             'seq': seq,
+            'cycle_wk': cycle_wk,
+            'cycle_sun': cycle_sun,
+            'wkday': wkday,
             'assignments': [
                 {
                     'part_code': a[5],
@@ -600,12 +603,88 @@ def cmd_merge_groups(args):
     }, indent=2))
 
 
+def cmd_resolve(args):
+    """Resolve liturgical precedence for a year (or a single date) and optionally
+    materialize the result into lit_observance_resolved."""
+    import datetime
+    from liturgio_tools.liturgical_calendar.resolver import (
+        resolve_year,
+        resolve_date,
+        materialize_year,
+    )
+
+    local_sols = list(args.local_solemnity or [])
+
+    if args.materialize:
+        engine = get_rw_engine()
+    else:
+        engine = get_ro_engine()
+
+    if args.date:
+        # Single-date mode: resolve the surrounding year but filter to the date.
+        target = datetime.date.fromisoformat(args.date)
+        year   = target.year
+    elif args.year:
+        year   = args.year
+        target = None
+    else:
+        print('ERROR: supply either --year YYYY or --date YYYY-MM-DD', file=sys.stderr)
+        sys.exit(1)
+
+    if args.materialize:
+        n = materialize_year(engine, args.jurisdiction, year, local_sols)
+        print(f'Materialized {n} rows for {args.jurisdiction} / {year}')
+        if target:
+            rows = [r for r in resolve_date(engine, args.jurisdiction, target, local_sols)
+                    if r['dt'] == target]
+        else:
+            rows = []  # already written; skip printing full year for brevity
+    else:
+        if target:
+            rows = resolve_date(engine, args.jurisdiction, target, local_sols)
+        else:
+            rows = resolve_year(engine, args.jurisdiction, year, local_sols)
+
+    if rows:
+        # Print a compact table.
+        header = f"{'DATE':<12} {'ROLE':<14} {'TRANSFERRED':<12} {'RANK':<25} {'EPOCH'}"
+        print(header)
+        print('-' * len(header))
+        for r in sorted(rows, key=lambda x: (x['dt'], x['role'])):
+            xfer = f"(from {r['nominal_dt']})" if r['is_transferred'] else ''
+            print(
+                f"{str(r['dt']):<12} {r['role']:<14} {xfer:<12} "
+                f"{r['rank_code']:<25} {r['epoch_slug']}"
+            )
+        print()
+        print(f"Total rows: {len(rows)}")
+
+    print()
+    print('=== JSON ===')
+    print(json.dumps(rows, indent=2, default=str))
+
+
 def cmd_assign(args):
     from sqlalchemy import text
 
+    # Psalter rule: wknum_mod_* are only valid without an epoch slug
+    if args.epoch and (args.wknum_mod_4 is not None or args.wknum_mod_2 is not None):
+        sys.exit(
+            'ERROR: --wknum-mod-4 / --wknum-mod-2 are psalter-fallback modifiers and '
+            'cannot be combined with --epoch. Use either --epoch (for a specific liturgical '
+            'context) or --wknum-mod-* (for a psalter fallback), not both.'
+        )
+
     engine = get_rw_engine()
     with engine.connect() as conn:
-        season, subseason, wknum = args.season, args.subseason, args.wknum
+        # Validate epoch slug if provided
+        if args.epoch:
+            epoch_row = conn.execute(text("""
+                SELECT slug, kind, title FROM lit_epoch WHERE slug = :slug
+            """), {'slug': args.epoch}).fetchone()
+            if not epoch_row:
+                sys.exit(f'ERROR: lit_epoch slug not found: {args.epoch!r}')
+            print(f'Epoch: {epoch_row[2]!r} ({epoch_row[1]}) — {epoch_row[0]}')
 
         # Look up part_id from service_part
         part = conn.execute(text("""
@@ -621,50 +700,50 @@ def cmd_assign(args):
 
         conn.execute(text("""
             INSERT INTO lit_part_assignment
-                (jurisdiction, part_id, season, subseason, wknum,
-                 wkday, seq, cycle_sun, cycle_wk,
-                 chant_group_id, assignment_authority_code, notes)
+                (jurisdiction, part_id, lit_epoch_slug,
+                 wknum_mod_4, wknum_mod_2,
+                 wkday, cycle_sun, cycle_wk,
+                 chant_group_id, assignment_authority_code, option_num, notes)
             VALUES
-                (:jur, :part_id, :season, :subseason, :wknum,
-                 :wkday, :seq, :cycle_sun, :cycle_wk,
-                 :gid, :authority, :notes)
-            ON DUPLICATE KEY UPDATE
-                chant_group_id = VALUES(chant_group_id),
-                assignment_authority_code = VALUES(assignment_authority_code),
-                notes = VALUES(notes),
-                updated_at = CURRENT_TIMESTAMP
+                (:jur, :part_id, :epoch_slug,
+                 :wknum_mod_4, :wknum_mod_2,
+                 :wkday, :cycle_sun, :cycle_wk,
+                 :gid, :authority, :option_num, :notes)
         """), {
             'jur': args.jurisdiction,
             'part_id': part_id,
-            'season': season,
-            'subseason': subseason,
-            'wknum': wknum,
+            'epoch_slug': args.epoch,
+            'wknum_mod_4': args.wknum_mod_4,
+            'wknum_mod_2': args.wknum_mod_2,
             'wkday': args.wkday,
-            'seq': args.seq,
             'cycle_sun': args.cycle_sun,
             'cycle_wk': args.cycle_wk,
             'gid': args.chant_group_id,
             'authority': args.authority,
+            'option_num': args.option_num,
             'notes': args.notes,
         })
         conn.commit()
 
-    print(f'Assigned {args.part_code} for {args.season}/{args.subseason}/wk{args.wknum} ({args.jurisdiction})')
+    epoch_display = args.epoch if args.epoch else '(psalter fallback)'
+    print(f'Assigned {args.part_code} for epoch={epoch_display} ({args.jurisdiction})')
     print(f'  chant_group_id: {args.chant_group_id}')
     print(f'  authority:      {args.authority}')
-    print(f'  wkday={args.wkday}  seq={args.seq}  cycle_sun={args.cycle_sun}  cycle_wk={args.cycle_wk}')
+    print(f'  option_num:     {args.option_num}')
+    print(f'  wkday={args.wkday}  wknum_mod_4={args.wknum_mod_4}  wknum_mod_2={args.wknum_mod_2}')
+    print(f'  cycle_sun={args.cycle_sun}  cycle_wk={args.cycle_wk}')
     print()
     print('=== JSON ===')
     print(json.dumps({
         'jurisdiction': args.jurisdiction,
-        'season': args.season,
-        'subseason': args.subseason,
-        'wknum': args.wknum,
+        'epoch': args.epoch,
         'part_code': args.part_code,
         'chant_group_id': args.chant_group_id,
         'authority': args.authority,
+        'option_num': args.option_num,
         'wkday': args.wkday,
-        'seq': args.seq,
+        'wknum_mod_4': args.wknum_mod_4,
+        'wknum_mod_2': args.wknum_mod_2,
         'cycle_sun': args.cycle_sun,
         'cycle_wk': args.cycle_wk,
     }, indent=2))
@@ -714,27 +793,51 @@ def main():
     p_merge.add_argument('--force', action='store_true',
                          help='Skip name-similarity warning prompt')
 
+    # resolve
+    p_resolve = sub.add_parser(
+        'resolve',
+        help='Resolve liturgical precedence and transfers for a year or date'
+    )
+    p_resolve.add_argument('--jurisdiction', default='UNIVERSAL',
+                           help='Jurisdiction code (default: UNIVERSAL)')
+    p_resolve.add_argument('--year', type=int, default=None,
+                           help='Civil year to resolve (e.g. 2028)')
+    p_resolve.add_argument('--date', default=None,
+                           help='Single date YYYY-MM-DD (resolves its whole year, '
+                                'filters output to this date)')
+    p_resolve.add_argument('--local-solemnity', action='append', metavar='SLUG',
+                           help='Saint slug to elevate to PROPER_SOLEMNITY '
+                                '(repeat for multiple, e.g. --local-solemnity st-mark)')
+    p_resolve.add_argument('--materialize', action='store_true',
+                           help='Write resolved rows to lit_observance_resolved '
+                                '(idempotent; requires RW access)')
+
     # assign
-    p_assign = sub.add_parser('assign', help='Assign a chant group to a liturgical day/part')
+    p_assign = sub.add_parser('assign', help='Assign a chant group to a liturgical epoch/part')
     p_assign.add_argument('--jurisdiction', default='UNIVERSAL')
     p_assign.add_argument('--part-code', required=True, help='e.g. in, gr, al, of, co')
-    p_assign.add_argument('--season', required=True, help='e.g. OT, ADVENT, LENT, EASTER')
-    p_assign.add_argument('--subseason', required=True, help='e.g. ORDINARY, ADVENT_1, LENT_1')
-    p_assign.add_argument('--wknum', type=int, required=True, help='Week number within season/subseason')
+    p_assign.add_argument('--epoch', default=None,
+                          help='lit_epoch slug to target (e.g. PASC-AD_ASC-02-5 for a day, '
+                               'PASC-AD_ASC-02 for the whole 2nd week of Easter). '
+                               'Omit for a psalter fallback (use with --wknum-mod-* instead).')
     p_assign.add_argument('--chant-group-id', type=int, required=True)
     p_assign.add_argument('--authority', required=True, help='GRADUALE | MISSAL | OCM | CUSTOM')
     p_assign.add_argument('--wkday', type=int, default=None,
-                          help='Day of week: 1=Sun…7=Sat. NULL (default) = all days. '
-                               'Use for typical weekly assignments.')
-    p_assign.add_argument('--seq', type=int, default=None,
-                          help='Liturgical sequence number. Use instead of --wkday for special cases '
-                               '(Christmas octave, Dec 17-24, Ascension US).')
+                          help='Day of week: 1=Sun…7=Sat. NULL (default) = any day. '
+                               'Narrows an epoch or psalter assignment to a specific weekday.')
+    p_assign.add_argument('--wknum-mod-4', type=int, default=None, choices=[0, 1, 2, 3],
+                          help='Psalter week mod 4 (0-3). Only valid without --epoch.')
+    p_assign.add_argument('--wknum-mod-2', type=int, default=None, choices=[0, 1],
+                          help='Psalter week mod 2 (0-1). Only valid without --epoch.')
     p_assign.add_argument('--cycle-sun', type=int, default=None,
                           help='Sunday lectionary year: 1=A, 2=B, 0=C (liturgical_year mod 3). '
                                'NULL = all years.')
     p_assign.add_argument('--cycle-wk', type=int, default=None,
                           help='Weekday lectionary year: liturgical_year mod 2. NULL = all years. '
                                'At most one of --cycle-sun / --cycle-wk may be set.')
+    p_assign.add_argument('--option-num', type=int, default=1,
+                          help='Option number: 1=primary/GR-default (default), 2=first alternate, '
+                               'etc. Use 2+ to record an "or" option alongside the primary.')
     p_assign.add_argument('--notes', default=None)
 
     args = parser.parse_args()
@@ -745,6 +848,7 @@ def main():
         'get-chant': cmd_get_chant,
         'save-english': cmd_save_english,
         'merge-groups': cmd_merge_groups,
+        'resolve': cmd_resolve,
         'assign': cmd_assign,
     }
     dispatch[args.command](args)

@@ -1,5 +1,10 @@
 # Handoff: lit_part_texts Loading — Saints Session
 
+> **Note (roadmap step 5):** the `lit_part_texts` table was renamed to
+> `lit_part_sources` and gained a `status` flag and source-page provenance
+> (`book`/`pdf_page_num`/`bbox`, FK to the new `books` table). References to
+> `lit_part_texts` below are historical; the current table is `lit_part_sources`.
+
 ## What was done
 
 Parsed and loaded ICEL Mass propers (entrance + communion antiphons, Latin + English) from liturgies.net into the `lit_part_texts` table for four seasons:

@@ -2,7 +2,7 @@
 """
 upload_english_chants.py
 
-Walks Introitus/, Offertorium/, and Communio/ for english*.gabc files,
+Walks chant directories (Introitus/, Offertorium/, Communio/, Alleluia/, etc.) for english*.gabc files,
 resolves the corresponding chant_group_id via the sibling Latin file (or the
 directory name when no Latin sibling exists), checks for duplicates, and
 inserts new rows into local_chants.
@@ -33,10 +33,92 @@ log = logging.getLogger(__name__)
 CHANT_ROOT = Path(__file__).parent
 
 PARTS = {
-    'Introitus':   'in',
-    'Offertorium': 'of',
-    'Communio':    'co',
+    'Introitus':    'in',
+    'Offertorium':  'of',
+    'Communio':     'co',
+    'Alleluia':     'al',
+    'Gradual':      'gr',
+    'Tractus':      'tr',
+    'Antiphona':    'an',
+    'Resp-breve':   'rb',
+    'Responsum':    're',
+    'Canticum':     'ca',
+    'hymns':        'hy',
 }
+
+# Map GABC header display names → gregobase office-part codes.
+# Values not found here (e.g. 'Vesperae Ant E') pass through as-is.
+OFFICE_PART_NORM = {
+    'introitus': 'in',    'introit': 'in',
+    'offertorium': 'of',  'offertory': 'of',
+    'communio': 'co',     'communion': 'co',
+    'alleluia': 'al',
+    'graduale': 'gr',     'gradual': 'gr',
+    'tractus': 'tr',      'tract': 'tr',
+    'antiphona': 'an',
+    'responsorium breve': 'rb',
+    'responsorium': 're',
+    'hymnus': 'hy',
+    'canticum': 'ca',
+    'psalmus': 'ps',
+}
+
+
+def normalize_part_code(office_part: str) -> str:
+    return OFFICE_PART_NORM.get(office_part.lower().strip(), office_part.strip())
+
+
+DIR_TO_OFFICE_PART = {
+    'Introitus': 'Introitus',
+    'Offertorium': 'Offertorium',
+    'Communio': 'Communio',
+    'Alleluia': 'Alleluia',
+    'Gradual': 'Graduale',
+    'Tractus': 'Tractus',
+    'Antiphona': 'Antiphona',
+    'Resp-breve': 'Responsorium breve',
+    'Responsum': 'Responsorium',
+    'Canticum': 'Canticum',
+    'hymns': 'Hymnus',
+}
+
+GREGOBASE_KNOWN_PARTS = frozenset({
+    'in', 'gr', 'tr', 'al', 'of', 'co', 'an', 're', 'rb', 'hy', 'ca', 'ps',
+    'se', 'ky', 'or', 'va', 'su', 'tp', 'pa', 'im', 'rh', 'pr',
+})
+
+
+def is_recognized_part(raw: str) -> bool:
+    lower = raw.lower().strip()
+    if lower in OFFICE_PART_NORM or lower in GREGOBASE_KNOWN_PARTS:
+        return True
+    return bool(re.match(
+        r'(Vesperae|Laudes|Officium|Hora|Completorium|Tertia|Sexta|Nona|'
+        r'Ad |Invitatorium|1V |M Ant|B Ant)', raw.strip()))
+
+
+def infer_mode_from_annotation(annotation: str) -> str:
+    roman = {'I': '1', 'II': '2', 'III': '3', 'IV': '4',
+             'V': '5', 'VI': '6', 'VII': '7', 'VIII': '8'}
+    parts = annotation.strip().rstrip(';').split()
+    if parts and parts[-1] in roman:
+        return roman[parts[-1]]
+    m = re.match(r'(\d)', annotation.strip())
+    if m:
+        return m.group(1)
+    return ''
+
+
+def add_gabc_headers(path: Path, headers_to_add: list[tuple[str, str]]) -> None:
+    content = path.read_text(encoding='utf-8-sig', errors='replace')
+    new_lines = '\n'.join(f'{key}: {value};' for key, value in headers_to_add)
+    if '%%' in content:
+        before, after = content.split('%%', 1)
+        content = before.rstrip('\n') + '\n' + new_lines + '\n%%' + after
+    else:
+        content = new_lines + '\n' + content
+    path.write_text(content, encoding='utf-8')
+
 
 # Order matters: RM is checked before GM so "tr. RM and GM" -> RM
 TRANSLATION_SOURCE_PATTERNS = [
@@ -77,7 +159,7 @@ class InterventionCounter:
 
 def parse_gabc_headers(path: Path) -> dict[str, str]:
     """Return {key: value} for every header line before %%, with lowercased keys."""
-    content = path.read_text(encoding='utf-8', errors='replace')
+    content = path.read_text(encoding='utf-8-sig', errors='replace')
     return {k.strip().lower(): v for k, v in parse_gabc_header(content).items()}
 
 
@@ -469,7 +551,7 @@ def update_local_chant(engine, row: dict, local_chant_id: str) -> None:
 
 def _read_gabc(eng_path: Path) -> tuple[dict, str]:
     headers = parse_gabc_headers(eng_path)
-    content = eng_path.read_text(encoding='utf-8', errors='replace')
+    content = eng_path.read_text(encoding='utf-8-sig', errors='replace')
     return headers, content
 
 
@@ -477,21 +559,77 @@ def process_file(eng_path: Path, part_code: str, engine, dry_run: bool,
                  counter: 'InterventionCounter | None' = None,
                  source_choices: list[dict] | None = None) -> str:
     headers, gabc_content = _read_gabc(eng_path)
-
-    incipit     = headers.get('name', '')
-    mode        = headers.get('mode', '')
+    rel = str(eng_path.relative_to(CHANT_ROOT)).replace('\\', '/')
     version     = eng_path.stem   # 'english', 'english2', 'english-f3', …
 
-    # --- Chant group lookup via Latin sibling or directory name ---
+    # --- Validate and fix missing/broken headers ---
+    fixes = []       # auto-inferred and written to file
+    problems = []    # user must fix manually
+    to_add = []      # headers to prepend: [(key, value), ...]
+
+    incipit = headers.get('name', '')
+    if not incipit:
+        incipit = kebab_to_incipit(eng_path.parent.name)
+        to_add.append(('name', incipit))
+        fixes.append(f'name: {incipit}  (from directory)')
+
+    mode = headers.get('mode', '')
+    if not mode:
+        mode = infer_mode_from_annotation(headers.get('annotation', ''))
+        if mode:
+            to_add.append(('mode', mode))
+            fixes.append(f'mode: {mode}  (from annotation)')
+        else:
+            problems.append('mode: ???  (could not infer)')
+
+    office_part_raw = headers.get('office-part', '')
+    if not office_part_raw:
+        part_dir = eng_path.parent.parent.name
+        office_part_raw = DIR_TO_OFFICE_PART.get(part_dir, '')
+        if office_part_raw:
+            to_add.append(('office-part', office_part_raw))
+            fixes.append(f'office-part: {office_part_raw}  (from directory)')
+        else:
+            problems.append(f'office-part: ???  (could not infer from {part_dir})')
+    elif not is_recognized_part(office_part_raw):
+        problems.append(f'office-part: {office_part_raw}  (not recognized)')
+
+    if fixes or problems:
+        if to_add and not dry_run:
+            add_gabc_headers(eng_path, to_add)
+        if not dry_run:
+            print()
+            print(RULE)
+            print(f'  Headers need attention: {rel}')
+            for f in fixes:
+                print(f'    ADDED    {f}')
+            for p in problems:
+                print(f'    FIX      {p}')
+            print(f'  Edit the file if needed, then press Enter (or "s" to skip)')
+            print(RULE)
+            choice = input('  > ').strip().lower()
+            if choice == 's':
+                return 'SKIPPED    (user skipped after header check)'
+            headers, gabc_content = _read_gabc(eng_path)
+            incipit = headers.get('name', '') or incipit
+            mode = headers.get('mode', '') or mode
+
+    # --- Derive part_code from file headers when possible ---
     latin_sibling = find_latin_sibling(eng_path)
     if latin_sibling:
         lat_headers = parse_gabc_headers(latin_sibling)
         lat_incipit = lat_headers.get('name', '') or kebab_to_incipit(eng_path.parent.name)
         lat_mode    = lat_headers.get('mode', '') or mode
+        lat_part    = lat_headers.get('office-part', '')
+        if lat_part:
+            part_code = normalize_part_code(lat_part)
         group_ids   = lookup_exact(engine, lat_incipit, part_code, lat_mode)
         if not group_ids:
             group_ids = lookup_prefix(engine, lat_incipit, part_code)
     else:
+        eng_part = headers.get('office-part', '')
+        if eng_part:
+            part_code = normalize_part_code(eng_part)
         lat_incipit = kebab_to_incipit(eng_path.parent.name)
         group_ids   = lookup_prefix(engine, lat_incipit, part_code)
 
@@ -508,7 +646,6 @@ def process_file(eng_path: Path, part_code: str, engine, dry_run: bool,
         else:
             if dry_run:
                 return f'AMBIGUOUS  ({len(group_ids)} chant_groups: {group_ids})'
-            rel = str(eng_path.relative_to(CHANT_ROOT)).replace('\\', '/')
             print(f'\n  AMBIGUOUS: {rel}')
             eng_body = extract_gabc_body(gabc_content)
             chosen = prompt_chant_group(group_ids, part_code, eng_path, eng_body, engine, counter)
@@ -587,6 +724,10 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument('directory', nargs='?', default=None,
+                        help='Chant directory to process (e.g. Communio, Antiphona, '
+                             'or parent directory containing all of them). '
+                             'Omit to process all known part directories.')
     parser.add_argument('--dry-run', action='store_true',
                         help='Preview without writing to the database')
     parser.add_argument('-v', '--verbose', action='count', default=0)
@@ -602,13 +743,40 @@ def main():
 
     source_choices = fetch_translation_source_choices(engine)
 
-    # Collect all files first
+    # Resolve which directories to scan
+    global CHANT_ROOT
+    single_chant = None
+    if args.directory:
+        target = Path(args.directory).resolve()
+        if target.name in PARTS:
+            CHANT_ROOT = target.parent
+            scan_dirs = {target.name: PARTS[target.name]}
+        elif any((target / d).is_dir() for d in PARTS):
+            CHANT_ROOT = target
+            scan_dirs = PARTS
+        elif target.parent.name in PARTS:
+            # Single chant directory, e.g. Antiphona/in-conspectu-angelorum
+            CHANT_ROOT = target.parent.parent
+            single_chant = (target, PARTS[target.parent.name])
+            scan_dirs = {}
+        else:
+            parser.error(f'{target} is not a recognized part directory, '
+                         f'chant directory, or parent of one')
+    else:
+        scan_dirs = PARTS
+
+    # Collect all files
     all_files: list[tuple[Path, str]] = []
-    for part_dir, part_code in PARTS.items():
-        root = CHANT_ROOT / part_dir
-        if root.is_dir():
-            for eng_path in sorted(root.glob('*/english*.gabc')):
-                all_files.append((eng_path, part_code))
+    if single_chant:
+        chant_dir, part_code = single_chant
+        for eng_path in sorted(chant_dir.glob('english*.gabc')):
+            all_files.append((eng_path, part_code))
+    else:
+        for part_dir, part_code in scan_dirs.items():
+            root = CHANT_ROOT / part_dir
+            if root.is_dir():
+                for eng_path in sorted(root.glob('*/english*.gabc')):
+                    all_files.append((eng_path, part_code))
 
     # Pre-scan with dry_run to count interventions needed (skipped in dry-run mode)
     counter = None

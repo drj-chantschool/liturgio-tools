@@ -10,7 +10,8 @@ season  varchar(10),
 subseason   varchar(10),
 wknum   smallint,
 seq smallint,
-lit_rank varchar(40)
+lit_rank varchar(40) NOT NULL DEFAULT 'UNDETERMINED',
+CONSTRAINT fk_litday_rank FOREIGN KEY (lit_rank) REFERENCES p_lit_rank(rank_code) ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
 insert into liturgical_day

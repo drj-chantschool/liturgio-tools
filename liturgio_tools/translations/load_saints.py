@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Migrate schema and load saints' feast day Mass propers into lit_part_texts.
+Migrate schema and load saints' feast day Mass propers into lit_part_sources.
 
 Schema changes (run once):
-  1. ALTER TABLE lit_part_texts MODIFY season VARCHAR(10) NULL
-  2. ALTER TABLE lit_part_texts ADD COLUMN month TINYINT UNSIGNED NULL
-  3. ALTER TABLE lit_part_texts ADD COLUMN day_of_month TINYINT UNSIGNED NULL
-  4. ALTER TABLE lit_part_texts ADD COLUMN feast_title VARCHAR(150) NULL
+  1. ALTER TABLE lit_part_sources MODIFY original_text TEXT NULL
+  2. ALTER TABLE lit_part_sources ADD COLUMN month TINYINT UNSIGNED NULL
+  3. ALTER TABLE lit_part_sources ADD COLUMN day_of_month TINYINT UNSIGNED NULL
+  4. ALTER TABLE lit_part_sources ADD COLUMN feast_title VARCHAR(150) NULL
+  5. ALTER TABLE lit_part_sources ADD COLUMN common_of VARCHAR(200) NULL
 
 Then inserts rows from translations/saints_propers.json (produced by
 translations/tools/parse_saints.py).
@@ -44,53 +45,45 @@ def get_engine(user='jcost', db_name='liturgio'):
 # ── Schema migration ─────────────────────────────────────────────────────
 
 MIGRATIONS = [
-    # Make season nullable so feast-day rows can omit it
-    (
-        "MODIFY season nullable",
-        "SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS "
-        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_texts' AND COLUMN_NAME='season'",
-        lambda row: row[0] == 'YES',
-        "ALTER TABLE lit_part_texts MODIFY COLUMN season VARCHAR(10) NULL",
-    ),
     # Make original_text nullable so common-only marker rows can omit it
     (
         "MODIFY original_text nullable",
         "SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS "
-        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_texts' AND COLUMN_NAME='original_text'",
+        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_sources' AND COLUMN_NAME='original_text'",
         lambda row: row[0] == 'YES',
-        "ALTER TABLE lit_part_texts MODIFY COLUMN original_text TEXT NULL",
+        "ALTER TABLE lit_part_sources MODIFY COLUMN original_text TEXT NULL",
     ),
     # Add month column
     (
         "ADD COLUMN month",
         "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
-        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_texts' AND COLUMN_NAME='month'",
+        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_sources' AND COLUMN_NAME='month'",
         lambda row: row[0] > 0,
-        "ALTER TABLE lit_part_texts ADD COLUMN month TINYINT UNSIGNED NULL",
+        "ALTER TABLE lit_part_sources ADD COLUMN month TINYINT UNSIGNED NULL",
     ),
     # Add day_of_month column
     (
         "ADD COLUMN day_of_month",
         "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
-        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_texts' AND COLUMN_NAME='day_of_month'",
+        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_sources' AND COLUMN_NAME='day_of_month'",
         lambda row: row[0] > 0,
-        "ALTER TABLE lit_part_texts ADD COLUMN day_of_month TINYINT UNSIGNED NULL",
+        "ALTER TABLE lit_part_sources ADD COLUMN day_of_month TINYINT UNSIGNED NULL",
     ),
     # Add feast_title column (for disambiguation when multiple feasts share a date)
     (
         "ADD COLUMN feast_title",
         "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
-        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_texts' AND COLUMN_NAME='feast_title'",
+        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_sources' AND COLUMN_NAME='feast_title'",
         lambda row: row[0] > 0,
-        "ALTER TABLE lit_part_texts ADD COLUMN feast_title VARCHAR(150) NULL",
+        "ALTER TABLE lit_part_sources ADD COLUMN feast_title VARCHAR(150) NULL",
     ),
     # Add common_of column (reference to the Common used when no proper antiphons exist)
     (
         "ADD COLUMN common_of",
         "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
-        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_texts' AND COLUMN_NAME='common_of'",
+        "WHERE TABLE_SCHEMA='liturgio' AND TABLE_NAME='lit_part_sources' AND COLUMN_NAME='common_of'",
         lambda row: row[0] > 0,
-        "ALTER TABLE lit_part_texts ADD COLUMN common_of VARCHAR(200) NULL",
+        "ALTER TABLE lit_part_sources ADD COLUMN common_of VARCHAR(200) NULL",
     ),
 ]
 
@@ -122,13 +115,12 @@ SERVICE_PARTS = {
 
 def _base_row(entry):
     return {
-        'season':       None, 'subseason': None,
-        'wknum':        None, 'wkday':     None,
-        'month':        entry['month'],
-        'day_of_month': entry['day_of_month'],
-        'feast_title':  entry.get('title'),
-        'cycle_sun':    None, 'cycle_wkday': None,
-        'common_of':    None,
+        'lit_epoch_slug':  entry.get('slug'),   # proper_of_saints.slug = lit_epoch saint node
+        'month':           entry['month'],
+        'day_of_month':    entry['day_of_month'],
+        'feast_title':     entry.get('title'),
+        'cycle_sun':       None, 'cycle_wkday': None,
+        'common_of':       None,
         'assignment_authority_code': 'MISSAL',
         'translation_source_code':   'ROMAN_MISSAL_2010_ICEL',
     }
@@ -136,8 +128,7 @@ def _base_row(entry):
 
 def build_rows(entry):
     """
-    Expand one JSON feast entry into lit_part_texts row dicts.
-    season/subseason/wknum/wkday are all NULL for calendar-date feasts.
+    Expand one JSON feast entry into lit_part_sources row dicts.
 
     Three cases:
     - Latin + English: original_text=Latin, vernacular_text=English, original_lang='la'
@@ -202,15 +193,15 @@ def build_rows(entry):
 # ── Main ─────────────────────────────────────────────────────────────────
 
 INSERT_SQL = """
-    INSERT INTO lit_part_texts
-        (season, subseason, wknum, wkday,
+    INSERT INTO lit_part_sources
+        (lit_epoch_slug,
          month, day_of_month, feast_title,
          cycle_sun, cycle_wkday, common_of,
          service_part, original_text, vernacular_text, text_src,
          original_lang, vernacular_lang,
          assignment_authority_code, translation_source_code)
     VALUES
-        (:season, :subseason, :wknum, :wkday,
+        (:lit_epoch_slug,
          :month, :day_of_month, :feast_title,
          :cycle_sun, :cycle_wkday, :common_of,
          :service_part, :original_text, :vernacular_text, :text_src,
@@ -277,17 +268,17 @@ def main():
     from sqlalchemy import text
     with engine.begin() as conn:
         conn.execute(text(INSERT_SQL), all_rows)
-        count = conn.execute(text('SELECT COUNT(*) FROM lit_part_texts')).scalar()
+        count = conn.execute(text('SELECT COUNT(*) FROM lit_part_sources')).scalar()
         feast_count = conn.execute(text(
-            "SELECT COUNT(*) FROM lit_part_texts WHERE month IS NOT NULL"
+            "SELECT COUNT(*) FROM lit_part_sources WHERE month IS NOT NULL"
         )).scalar()
-        print(f'Inserted {len(all_rows)} rows. Total in lit_part_texts: {count} '
+        print(f'Inserted {len(all_rows)} rows. Total in lit_part_sources: {count} '
               f'(of which feast-day rows: {feast_count})')
 
         # Quick verification
         sample = conn.execute(text(
             "SELECT month, day_of_month, feast_title, service_part, text_src "
-            "FROM lit_part_texts "
+            "FROM lit_part_sources "
             "WHERE month IS NOT NULL "
             "ORDER BY month, day_of_month, feast_title, service_part LIMIT 10"
         )).fetchall()

@@ -118,13 +118,21 @@ CREATE TABLE service_part (
 
 
 -- ============================================================
--- lit_part_assignment (updated with psalter-style fallback dims)
+-- lit_part_assignment (phase 4b: migrated to lit_epoch_slug)
 --
--- wknum_mod_4 and wknum_mod_2 are "last-resort" selectors:
--- they should be considered only if nothing matches on season/subseason/wknum/wkday/seq.
+-- DEPENDS ON: lit_epoch must be created first (run make-lit-epoch.sql
+-- before this file in the build order).
 --
--- To enforce that intent structurally, we keep them nullable and add a CHECK
--- that they are only used when the higher-level liturgical fields are NULL.
+-- lit_epoch_slug is a FK into lit_epoch(slug) and replaces the former
+-- granular columns season / subseason / wknum / seq.  NULL means the row
+-- applies at all epochs (psalter-fallback / pure-cycle rows).
+--
+-- wknum_mod_4 and wknum_mod_2 are "last-resort" psalter selectors.
+-- Desired intent: they should only be used when lit_epoch_slug is NULL.
+-- NOTE: MySQL error 3823 prevents a CHECK constraint from referencing a
+-- column that participates in a FK referential action, so the constraint
+--   CHECK ((wknum_mod_4 IS NULL AND wknum_mod_2 IS NULL) OR lit_epoch_slug IS NULL)
+-- cannot be stored.  This invariant is enforced at the application layer.
 -- ============================================================
 CREATE TABLE lit_part_assignment (
     assignment_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -132,18 +140,15 @@ CREATE TABLE lit_part_assignment (
     jurisdiction  VARCHAR(64) NOT NULL,      -- UNIVERSAL, US, etc.
     part_id       BIGINT UNSIGNED NOT NULL,  -- FK -> service_part.part_id
 
-    -- Psalter fallback selectors (last resort)
+    -- Liturgical epoch reference (replaces season/subseason/wknum/seq)
+    lit_epoch_slug VARCHAR(64) NULL,         -- FK -> lit_epoch(slug); NULL = all epochs
+
+    -- Psalter fallback selectors (last resort; only meaningful when lit_epoch_slug IS NULL)
     wknum_mod_4   TINYINT UNSIGNED NULL,     -- 0..3
     wknum_mod_2   TINYINT UNSIGNED NULL,     -- 0..1
 
-    -- Liturgical hierarchy selectors
-    season        VARCHAR(10) NULL,
-    subseason     VARCHAR(10) NULL,
-    wknum         SMALLINT NULL,
-
     -- Lowest-level selectors
     wkday         TINYINT UNSIGNED NULL,     -- 1..7 (Sunday=1)
-    seq           SMALLINT NULL,
 
     -- Optional lectionary cycle selectors (wildcards via NULL)
     cycle_wk      TINYINT UNSIGNED NULL,     -- 0/1
@@ -155,31 +160,46 @@ CREATE TABLE lit_part_assignment (
     -- Why/authority for this assignment (nullable)
     assignment_authority_code VARCHAR(20) NULL,
 
+    -- 1=primary/GR-default, 2=first alternate, etc.
+    -- Allows multiple valid chant options per slot (e.g. GR proper + 'or' option).
+    -- Part of the unique key so each (slot, option_num) is distinct.
+    -- Added step 6b (2026-06-17); migrated via scripts/migrate_step6b_option_num.py.
+    option_num    TINYINT UNSIGNED NOT NULL DEFAULT 1,
+
     notes         VARCHAR(500) NULL,
+
+    -- 1 = in the review queue / not yet human-reviewed (safe default for
+    -- script/LLM/untrusted-created assignments); 0 = human-reviewed
+    needs_review  TINYINT NOT NULL DEFAULT 1,
 
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (assignment_id),
 
-    -- Prevent duplicates at the same specificity for the same slot
-    UNIQUE KEY uq_lit_part_assignment (
+    -- Unique per (slot, option_num): primary and alternates can coexist
+    UNIQUE KEY uq_lit_part_assignment_v2 (
         jurisdiction,
         part_id,
+        lit_epoch_slug,
+        wkday,
+        cycle_wk,
+        cycle_sun,
         wknum_mod_4,
         wknum_mod_2,
-        season,
-        subseason,
-        wknum,
-        wkday,
-        seq,
-        cycle_wk,
-        cycle_sun
+        option_num
     ),
 
     KEY idx_lpa_lookup (jurisdiction, part_id),
     KEY idx_lpa_group (chant_group_id),
     KEY idx_lpa_authority (assignment_authority_code),
+    KEY idx_lpa_needs_review (needs_review),
+
+    CONSTRAINT fk_lpa_epoch
+        FOREIGN KEY (lit_epoch_slug)
+        REFERENCES lit_epoch(slug)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
 
     CONSTRAINT fk_lpa_part
         FOREIGN KEY (part_id)
@@ -213,17 +233,12 @@ CREATE TABLE lit_part_assignment (
         CHECK (cycle_wk IS NULL OR cycle_wk IN (0,1)),
 
     CONSTRAINT chk_lpa_cycle_sun_range
-        CHECK (cycle_sun IS NULL OR cycle_sun IN (0,1,2)),
+        CHECK (cycle_sun IS NULL OR cycle_sun IN (0,1,2))
 
-    CONSTRAINT chk_lpa_not_both_wkday_and_seq
-        CHECK (NOT (wkday IS NOT NULL AND seq IS NOT NULL)),
-
-    -- Enforce "last resort": only allow psalter fallback selectors when liturgical selectors are absent
-    CONSTRAINT chk_lpa_psalter_only_when_no_liturgical_keys
-        CHECK (
-            (wknum_mod_4 IS NULL AND wknum_mod_2 IS NULL)
-            OR (season IS NULL AND subseason IS NULL AND wknum IS NULL AND wkday IS NULL AND seq IS NULL)
-        )
+    -- REMOVED (phase 4b):
+    --   chk_lpa_not_both_wkday_and_seq  (seq column dropped)
+    --   chk_lpa_psalter_only_when_no_liturgical_keys  (replaced by application-layer
+    --     enforcement; MySQL 3823 prevents CHECK on FK-referential-action columns)
 );
 
 

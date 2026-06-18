@@ -22,7 +22,7 @@ proper texts.
   - `gregobase_sync/` — sync GregoBase data into `gregobase_chants` /
     `sync_state`
   - `translations/` — scrape ICEL Mass-proper translations from
-    liturgies.net and load them into `lit_part_texts` (see
+    liturgies.net and load them into `lit_part_sources` (see
     `translations/HANDOFF.md`)
 - `examples/melodic_similarity.py` — load chants via
   `liturgio_tools.gregobase.load_chants()`, run
@@ -88,12 +88,12 @@ Prerequisites not created in this repo:
 ## Translations pipeline
 
 Scrape ICEL Mass-proper translations from liturgies.net into JSON, then
-load the JSON into `lit_part_texts`:
+load the JSON into `lit_part_sources` (formerly `lit_part_texts`):
 
 1. `translations/tools/parse_propers.py`, `parse_easter.py`,
    `parse_saints.py` → write `*_propers.json` (gitignored, regenerable —
    network scrape)
 2. `translations/load_propers.py`, `load_lit_part_texts.py`,
-   `load_saints.py` → load the JSON into `lit_part_texts`
+   `load_saints.py` → load the JSON into `lit_part_sources`
 
 See `translations/HANDOFF.md` for the current status of this pipeline.
