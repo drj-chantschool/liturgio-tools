@@ -395,6 +395,8 @@ def main():
     )
     parser.add_argument('--dry-run', action='store_true',
                         help='Print what would happen without making changes.')
+    parser.add_argument('--ddl-only', action='store_true',
+                        help='Run Phase 0 DDL changes only; skip data migration and drop.')
     parser.add_argument('--skip-drop', action='store_true',
                         help='Skip the DROP TABLE lit_part_assignment step.')
     args = parser.parse_args()
@@ -422,6 +424,11 @@ def main():
         else:
             with engine.begin() as conn:
                 step(conn, dry_run=False)
+
+    if args.ddl_only:
+        print('\n--ddl-only: stopping after Phase 0.')
+        engine.dispose()
+        return
 
     print('\n── Phase A: update lps rows referenced by lpa ──')
     if args.dry_run:
