@@ -185,11 +185,15 @@ def migrate_phase_a(conn, dry_run):
     """
     from sqlalchemy import text
 
-    rows = conn.execute(text("""
+    has_lpa_uuid = column_exists(conn, 'lit_part_assignment', 'chant_uuid')
+    lpa_uuid_col = 'lpa.chant_uuid AS lpa_uuid' if has_lpa_uuid else 'NULL AS lpa_uuid'
+
+    rows = conn.execute(text(f"""
         SELECT lpa.assignment_id, lpa.text_id, lpa.jurisdiction, lpa.option_num,
                lpa.wknum_mod_4, lpa.wknum_mod_2, lpa.cycle_wk, lpa.notes,
                lpa.needs_review, lpa.chant_group_id,
-               lps.chant_uuid AS existing_uuid
+               {lpa_uuid_col},
+               lps.chant_uuid  AS existing_uuid
         FROM lit_part_assignment lpa
         JOIN lit_part_sources lps ON lps.text_id = lpa.text_id
     """)).mappings().fetchall()
@@ -200,8 +204,10 @@ def migrate_phase_a(conn, dry_run):
 
     for r in rows:
         chant_uuid = r['existing_uuid']
-        if chant_uuid is None and r['chant_group_id']:
-            chant_uuid = _find_chant_uuid(conn, r['chant_group_id'])
+        if chant_uuid is None:
+            # Prefer the pre-populated lpa.chant_uuid (from prep script) over
+            # the coarse _find_chant_uuid fallback.
+            chant_uuid = r['lpa_uuid'] or _find_chant_uuid(conn, r['chant_group_id'])
             if chant_uuid:
                 uuid_populated += 1
 
@@ -253,12 +259,15 @@ def migrate_phase_a(conn, dry_run):
 def migrate_phase_b(conn, dry_run):
     from sqlalchemy import text
 
-    rows = conn.execute(text("""
+    has_lpa_uuid = column_exists(conn, 'lit_part_assignment', 'chant_uuid')
+    lpa_uuid_col = 'lpa.chant_uuid AS lpa_uuid' if has_lpa_uuid else 'NULL AS lpa_uuid'
+
+    rows = conn.execute(text(f"""
         SELECT lpa.assignment_id, lpa.jurisdiction, lpa.part_id,
                lpa.lit_epoch_slug, lpa.wkday, lpa.cycle_wk, lpa.cycle_sun,
                lpa.wknum_mod_4, lpa.wknum_mod_2, lpa.option_num,
                lpa.assignment_authority_code, lpa.notes, lpa.needs_review,
-               lpa.chant_group_id
+               lpa.chant_group_id, {lpa_uuid_col}
         FROM lit_part_assignment lpa
         WHERE lpa.text_id IS NULL
     """)).mappings().fetchall()
@@ -268,7 +277,8 @@ def migrate_phase_b(conn, dry_run):
     uuid_missing = 0
 
     for r in rows:
-        chant_uuid = _find_chant_uuid(conn, r['chant_group_id'])
+        # Prefer pre-populated lpa.chant_uuid; fall back to group-map lookup.
+        chant_uuid = r['lpa_uuid'] or _find_chant_uuid(conn, r['chant_group_id'])
         if chant_uuid is None:
             uuid_missing += 1
 
