@@ -162,7 +162,7 @@ def build_rows(entry):
                 year_label = antiphon.get('year')
                 row = _base_row(entry)
                 row.update({
-                    'service_part':    part_code,
+                    'part_code':       part_code,
                     'original_text':   original_text,
                     'original_lang':   original_lang,
                     'vernacular_text': vernacular_text,
@@ -177,7 +177,7 @@ def build_rows(entry):
         for part_code in SERVICE_PARTS.values():
             row = _base_row(entry)
             row.update({
-                'service_part':    part_code,
+                'part_code':       part_code,
                 'original_text':   None,
                 'original_lang':   'la',
                 'vernacular_text': None,
@@ -197,14 +197,14 @@ INSERT_SQL = """
         (lit_epoch_slug,
          month, day_of_month, feast_title,
          cycle_sun, cycle_wkday, common_of,
-         service_part, original_text, vernacular_text, text_src,
+         part_id, original_text, vernacular_text, text_src,
          original_lang, vernacular_lang,
          assignment_authority_code, translation_source_code)
     VALUES
         (:lit_epoch_slug,
          :month, :day_of_month, :feast_title,
          :cycle_sun, :cycle_wkday, :common_of,
-         :service_part, :original_text, :vernacular_text, :text_src,
+         :part_id, :original_text, :vernacular_text, :text_src,
          :original_lang, :vernacular_lang,
          :assignment_authority_code, :translation_source_code)
 """
@@ -267,20 +267,34 @@ def main():
 
     from sqlalchemy import text
     with engine.begin() as conn:
-        conn.execute(text(INSERT_SQL), all_rows)
+        part_map = {
+            r['part_code']: r['part_id']
+            for r in conn.execute(text(
+                'SELECT part_code, part_id FROM service_part'
+            )).mappings()
+        }
+        insert_rows = []
+        for row in all_rows:
+            r = dict(row)
+            code = r.pop('part_code')
+            r['part_id'] = part_map[code]
+            insert_rows.append(r)
+
+        conn.execute(text(INSERT_SQL), insert_rows)
         count = conn.execute(text('SELECT COUNT(*) FROM lit_part_sources')).scalar()
         feast_count = conn.execute(text(
             "SELECT COUNT(*) FROM lit_part_sources WHERE month IS NOT NULL"
         )).scalar()
-        print(f'Inserted {len(all_rows)} rows. Total in lit_part_sources: {count} '
+        print(f'Inserted {len(insert_rows)} rows. Total in lit_part_sources: {count} '
               f'(of which feast-day rows: {feast_count})')
 
         # Quick verification
         sample = conn.execute(text(
-            "SELECT month, day_of_month, feast_title, service_part, text_src "
-            "FROM lit_part_sources "
-            "WHERE month IS NOT NULL "
-            "ORDER BY month, day_of_month, feast_title, service_part LIMIT 10"
+            "SELECT month, day_of_month, feast_title, sp.part_code, lps.text_src "
+            "FROM lit_part_sources lps "
+            "JOIN service_part sp ON sp.part_id = lps.part_id "
+            "WHERE lps.month IS NOT NULL "
+            "ORDER BY month, day_of_month, feast_title, sp.part_code LIMIT 10"
         )).fetchall()
         print('\nSample feast-day rows:')
         for r in sample:

@@ -90,8 +90,8 @@ def parts_for_date(
     list[dict]
         One dict per result row, keyed by the query's output columns:
         ``title, part_id, service_code, part_code, display_order,
-        chant_group_id, assignment_authority_code, assignment_jurisdiction,
-        notes, assignment_id``. (The internal ``rn`` ranking column is included
+        text_id, chant_uuid, chant_group_id, assignment_authority_code,
+        assignment_jurisdiction, notes``. (The internal ``rn`` ranking column is included
         only when ``winner_only=False`` is requested via the SQL; here we filter
         in Python so the public shape is stable.)
 

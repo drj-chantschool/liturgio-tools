@@ -37,6 +37,10 @@
 --   fallback) continue to come from the temporal proper_of_seasons / lit_epoch
 --   row, since those are properties of the civil/temporal day regardless of any
 --   overlaid sanctoral observance.
+--
+-- Step 8 (2026-06-26): queries lit_part_sources directly (lit_part_assignment
+--   dropped). chant_group_id is derived by joining through lps.chant_uuid to
+--   gregobase_chant_group_map or local_chants.
 
 WITH RECURSIVE ctx AS (
     -- Resolve the liturgical day for this date, preferring the requested jurisdiction.
@@ -89,15 +93,19 @@ candidates AS (
         sp.part_code,
         sp.display_order,
 
-        lpa.assignment_id,
-        lpa.jurisdiction                AS assignment_jurisdiction,
-        lpa.chant_group_id,
-        lpa.assignment_authority_code,
-        lpa.notes,
+        lps.text_id,
+        lps.jurisdiction                AS assignment_jurisdiction,
+        lps.assignment_authority_code,
+        lps.notes,
+        lps.chant_uuid,
+
+        -- Derive chant_group_id by joining through chant_uuid.
+        -- gregobase: prefix → gregobase_chant_group_map; local: → local_chants.
+        COALESCE(gcm.chant_group_id, lc.chant_group_id) AS chant_group_id,
 
         -- Is this an epoch match (1) or a psalter fallback (0)?
         -- Epoch matches always beat fallback.
-        CASE WHEN lpa.lit_epoch_slug IS NOT NULL THEN 1 ELSE 0 END
+        CASE WHEN lps.lit_epoch_slug IS NOT NULL THEN 1 ELSE 0 END
             AS epoch_match,
 
         -- For epoch matches, the depth at which the slug was found.
@@ -106,13 +114,13 @@ candidates AS (
         anc.depth,
 
         -- Specificity of cycle/wkday filters: more non-null filters = more specific.
-        (   (lpa.cycle_wk  IS NOT NULL) +
-            (lpa.cycle_sun IS NOT NULL) +
-            (lpa.wkday     IS NOT NULL)
+        (   (lps.cycle_wkday  IS NOT NULL) +
+            (lps.cycle_sun IS NOT NULL) +
+            (lps.wkday     IS NOT NULL)
         ) AS cycle_specificity,
 
         -- Jurisdiction preference: requested jurisdiction beats UNIVERSAL.
-        CASE WHEN lpa.jurisdiction = ctx.req_jurisdiction THEN 1 ELSE 0 END
+        CASE WHEN lps.jurisdiction = ctx.req_jurisdiction THEN 1 ELSE 0 END
             AS jur_preference
 
     FROM ctx
@@ -121,31 +129,39 @@ candidates AS (
     JOIN service_part sp
       ON sp.service_code = :service_code
 
-    -- Epoch-matched assignments: the assignment's slug must be in the ancestor set
-    JOIN lit_part_assignment lpa
-      ON lpa.part_id = sp.part_id
-     AND lpa.jurisdiction IN (ctx.req_jurisdiction, 'UNIVERSAL')
+    -- Epoch-matched assignments from lit_part_sources
+    JOIN lit_part_sources lps
+      ON lps.part_id = sp.part_id
+     AND lps.jurisdiction IN (ctx.req_jurisdiction, 'UNIVERSAL')
 
     LEFT JOIN ancestors anc
-      ON anc.slug = lpa.lit_epoch_slug    -- NULL for psalter rows (lit_epoch_slug IS NULL)
+      ON anc.slug = lps.lit_epoch_slug   -- NULL for psalter rows
+
+    -- Resolve chant_group_id from chant_uuid (two prefix types)
+    LEFT JOIN gregobase_chant_group_map gcm
+           ON lps.chant_uuid LIKE 'gregobase:%'
+          AND gcm.gregobase_id = CAST(SUBSTRING(lps.chant_uuid, 11) AS UNSIGNED)
+    LEFT JOIN local_chants lc
+           ON lps.chant_uuid LIKE 'local:%'
+          AND lc.local_chant_id = SUBSTRING(lps.chant_uuid, 7)
 
     -- Only include this row if it is an epoch match OR a psalter fallback
     WHERE (
         -- Epoch match: the assignment's slug is an ancestor of today's day slug
-        (lpa.lit_epoch_slug IS NOT NULL AND anc.slug IS NOT NULL)
+        (lps.lit_epoch_slug IS NOT NULL AND anc.slug IS NOT NULL)
 
         -- Psalter fallback: no epoch slug, but wknum_mod filters must agree
         OR (
-            lpa.lit_epoch_slug IS NULL
-            AND (lpa.wknum_mod_4 IS NULL OR lpa.wknum_mod_4 = MOD(ctx.wknum, 4))
-            AND (lpa.wknum_mod_2 IS NULL OR lpa.wknum_mod_2 = MOD(ctx.wknum, 2))
+            lps.lit_epoch_slug IS NULL
+            AND (lps.wknum_mod_4 IS NULL OR lps.wknum_mod_4 = MOD(ctx.wknum, 4))
+            AND (lps.wknum_mod_2 IS NULL OR lps.wknum_mod_2 = MOD(ctx.wknum, 2))
         )
     )
 
     -- Cycle and wkday wildcard filters (applied to both epoch and psalter rows)
-    AND (lpa.cycle_wk  IS NULL OR lpa.cycle_wk  = ctx.cycle_wk)
-    AND (lpa.cycle_sun IS NULL OR lpa.cycle_sun = ctx.cycle_sun)
-    AND (lpa.wkday     IS NULL OR lpa.wkday     = ctx.wkday)
+    AND (lps.cycle_wkday IS NULL OR lps.cycle_wkday = ctx.cycle_wk)
+    AND (lps.cycle_sun IS NULL OR lps.cycle_sun = ctx.cycle_sun)
+    AND (lps.wkday     IS NULL OR lps.wkday     = ctx.wkday)
 ),
 ranked AS (
     SELECT
@@ -157,7 +173,7 @@ ranked AS (
                 c.depth              ASC,    -- smallest depth wins (day < week < season)
                 c.cycle_specificity  DESC,   -- more cycle/wkday filters = more specific
                 c.jur_preference     DESC,   -- requested jurisdiction beats UNIVERSAL
-                c.assignment_id      DESC    -- final tiebreak: latest assignment wins
+                c.text_id            DESC    -- final tiebreak: latest row wins
         ) AS rn
     FROM candidates c
 )
@@ -168,12 +184,13 @@ SELECT
     part_code,
     display_order,
 
+    text_id,
+    chant_uuid,
     chant_group_id,
     assignment_authority_code,
 
     assignment_jurisdiction,
     notes,
-    assignment_id,
     rn               -- ranking within each part_id; rn = 1 is the winner
 FROM ranked
 -- WHERE rn = 1      -- uncomment to return only the winning assignment per part

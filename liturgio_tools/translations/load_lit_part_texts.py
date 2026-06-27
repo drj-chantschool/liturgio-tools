@@ -64,10 +64,11 @@ CREATE TABLE IF NOT EXISTS lit_part_sources (
     text_id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     wkday              TINYINT UNSIGNED NULL,
     cycle_sun          TINYINT UNSIGNED NULL,
-    cycle_wkday        TINYINT UNSIGNED NULL,
-    service_part       VARCHAR(4)      NOT NULL,
+    cycle_wkday           TINYINT UNSIGNED NULL,
+    part_id            BIGINT UNSIGNED NOT NULL,
     original_text      TEXT            NULL,
     vernacular_text    TEXT            NULL,
+    instruction        TEXT            NULL,
     text_src           VARCHAR(100)    NULL,
     original_lang      VARCHAR(10)     NOT NULL DEFAULT 'la',
     vernacular_lang    VARCHAR(10)     NULL,
@@ -78,13 +79,15 @@ CREATE TABLE IF NOT EXISTS lit_part_sources (
     day_of_month       TINYINT UNSIGNED NULL,
     feast_title        VARCHAR(150)    NULL,
     common_of          VARCHAR(200)    NULL,
-    status             VARCHAR(20)     NOT NULL DEFAULT 'draft',
+    review_status      VARCHAR(20)     NOT NULL DEFAULT 'draft',
     book               VARCHAR(40)     NULL,
     pdf_page_num       INT             NULL,
     bbox               VARCHAR(64)     NULL,
     lit_epoch_slug     VARCHAR(64)     NULL,
     created_at         TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at         TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_lps_part (part_id),
+    CONSTRAINT fk_lps_part FOREIGN KEY (part_id) REFERENCES service_part(part_id) ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT fk_lps_book FOREIGN KEY (book, pdf_page_num)
         REFERENCES books(book, pdf_page_num),
     CONSTRAINT fk_lps_epoch FOREIGN KEY (lit_epoch_slug)
@@ -180,8 +183,8 @@ def build_rows(entry):
                 'lit_epoch_slug':            _epoch_slug(season, subseason, wknum, seq),
                 'wkday':                     seq,
                 'cycle_sun':                 cycle_sun,
-                'cycle_wkday':               None,
-                'service_part':              part_code,
+                'cycle_wkday':                  None,
+                'part_code':                 part_code,  # resolved to part_id at insert time
                 'original_text':             antiphon.get('latin', ''),
                 'vernacular_text':           antiphon.get('english'),
                 'text_src':                  antiphon.get('citation'),
@@ -233,30 +236,46 @@ def main():
         print('Table lit_part_sources ready.')
 
         if all_rows:
+            # Resolve part_code → part_id for each row
+            part_map = {
+                r['part_code']: r['part_id']
+                for r in conn.execute(text(
+                    'SELECT part_code, part_id FROM service_part'
+                )).mappings()
+            }
+            insert_rows = []
+            for row in all_rows:
+                r = dict(row)
+                code = r.pop('part_code')
+                r['part_id'] = part_map[code]
+                insert_rows.append(r)
+
             conn.execute(
                 text("""
                     INSERT INTO lit_part_sources
                         (lit_epoch_slug, wkday, cycle_sun, cycle_wkday,
-                         service_part, original_text, vernacular_text, text_src,
+                         part_id, original_text, vernacular_text, text_src,
                          original_lang, vernacular_lang,
                          assignment_authority_code, translation_source_code)
                     VALUES
                         (:lit_epoch_slug, :wkday, :cycle_sun, :cycle_wkday,
-                         :service_part, :original_text, :vernacular_text, :text_src,
+                         :part_id, :original_text, :vernacular_text, :text_src,
                          :original_lang, :vernacular_lang,
                          :assignment_authority_code, :translation_source_code)
                 """),
-                all_rows
+                insert_rows
             )
-            print(f'Inserted {len(all_rows)} rows.')
+            print(f'Inserted {len(insert_rows)} rows.')
 
         # Quick verification
         count = conn.execute(text('SELECT COUNT(*) FROM lit_part_sources')).scalar()
         print(f'Total rows in lit_part_sources: {count}')
 
         sample = conn.execute(text(
-            "SELECT lit_epoch_slug, service_part, text_src "
-            "FROM lit_part_sources ORDER BY lit_epoch_slug, service_part LIMIT 10"
+            "SELECT lit_epoch_slug, sp.part_code, lps.text_src "
+            "FROM lit_part_sources lps "
+            "JOIN service_part sp ON sp.part_id = lps.part_id "
+            "ORDER BY lps.lit_epoch_slug, sp.part_code LIMIT 10"
         )).fetchall()
         print('\nSample rows:')
         for r in sample:

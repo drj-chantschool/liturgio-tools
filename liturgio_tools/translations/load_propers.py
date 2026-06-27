@@ -91,7 +91,7 @@ def build_rows(entry):
                 'wkday':                     seq,
                 'cycle_sun':                 YEAR_CYCLE.get(year_label) if year_label else None,
                 'cycle_wkday':               None,
-                'service_part':              part_code,
+                'part_code':                 part_code,
                 'original_text':             latin,
                 'vernacular_text':           antiphon.get('english') or None,
                 'text_src':                  antiphon.get('citation') or None,
@@ -115,12 +115,12 @@ JSON_FILES = [
 INSERT_SQL = """
     INSERT INTO lit_part_sources
         (lit_epoch_slug, wkday, cycle_sun, cycle_wkday,
-         service_part, original_text, vernacular_text, text_src,
+         part_id, original_text, vernacular_text, text_src,
          original_lang, vernacular_lang,
          assignment_authority_code, translation_source_code)
     VALUES
         (:lit_epoch_slug, :wkday, :cycle_sun, :cycle_wkday,
-         :service_part, :original_text, :vernacular_text, :text_src,
+         :part_id, :original_text, :vernacular_text, :text_src,
          :original_lang, :vernacular_lang,
          :assignment_authority_code, :translation_source_code)
 """
@@ -162,16 +162,30 @@ def main():
     engine = get_engine('jcost')
     from sqlalchemy import text
     with engine.begin() as conn:
-        conn.execute(text(INSERT_SQL), all_rows)
+        part_map = {
+            r['part_code']: r['part_id']
+            for r in conn.execute(text(
+                'SELECT part_code, part_id FROM service_part'
+            )).mappings()
+        }
+        insert_rows = []
+        for row in all_rows:
+            r = dict(row)
+            code = r.pop('part_code')
+            r['part_id'] = part_map[code]
+            insert_rows.append(r)
+
+        conn.execute(text(INSERT_SQL), insert_rows)
         count = conn.execute(text('SELECT COUNT(*) FROM lit_part_sources')).scalar()
-        print(f'Inserted {len(all_rows)} rows. Total in lit_part_sources: {count}')
+        print(f'Inserted {len(insert_rows)} rows. Total in lit_part_sources: {count}')
 
         # Quick verification
         sample = conn.execute(text(
-            "SELECT lit_epoch_slug, service_part, text_src "
-            "FROM lit_part_sources "
-            "WHERE lit_epoch_slug NOT LIKE 'PASC%' "
-            "ORDER BY lit_epoch_slug, service_part LIMIT 10"
+            "SELECT lps.lit_epoch_slug, sp.part_code, lps.text_src "
+            "FROM lit_part_sources lps "
+            "JOIN service_part sp ON sp.part_id = lps.part_id "
+            "WHERE lps.lit_epoch_slug NOT LIKE 'PASC%' "
+            "ORDER BY lps.lit_epoch_slug, sp.part_code LIMIT 10"
         )).fetchall()
         print('\nSample non-Easter rows:')
         for r in sample:
