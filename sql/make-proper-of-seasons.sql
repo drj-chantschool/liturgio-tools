@@ -1,4 +1,16 @@
-drop table if exists proper_of_seasons; 
+-- ============================================================
+-- make-proper-of-seasons.sql
+-- Builds proper_of_seasons from scratch.
+--
+-- Replaces all references to liturgical_day with lit_epoch (kind='day').
+-- The natural key (season, subseason, wknum, seq) is the same;
+-- lit_epoch.slug is the new primary key and equals the old
+-- liturgical_day.lit_day_id for every day node.
+--
+-- FK: proper_of_seasons.lit_day_id references lit_epoch(slug).
+-- ============================================================
+
+drop table if exists proper_of_seasons;
 
 
 CREATE TABLE proper_of_seasons (
@@ -11,7 +23,7 @@ CREATE TABLE proper_of_seasons (
     -- Liturgical year key you use throughout your system
     liturgical_year SMALLINT UNSIGNED NOT NULL,
 
-    -- Liturgical day identifier
+    -- Liturgical day identifier (FK to lit_epoch.slug)
     lit_day_id VARCHAR(64) NULL,
 
     -- Computed day-of-week with Sunday=1 ... Saturday=7
@@ -32,7 +44,7 @@ CREATE TABLE proper_of_seasons (
 
     CONSTRAINT fk_pos_lit_day
         FOREIGN KEY (lit_day_id)
-        REFERENCES liturgical_day(lit_day_id)
+        REFERENCES lit_epoch(slug)
         ON UPDATE CASCADE
         ON DELETE RESTRICT
 );
@@ -74,12 +86,13 @@ FROM days d;
 -- --- ANCHOR DATES
 -- Find the beginning of the Liturgical year
 update proper_of_seasons ps
-join liturgical_day ld
-on season = 'ADV'
-and subseason ='I'
-and seq = 1
-and wknum = 1
-set ps.lit_day_id = ld.lit_day_id
+join lit_epoch ld
+on ld.kind = 'day'
+and ld.season = 'ADV'
+and ld.subseason ='I'
+and ld.seq = 1
+and ld.wknum = 1
+set ps.lit_day_id = ld.slug
 where wkday = 1
 AND dt BETWEEN
       DATE(CONCAT(YEAR(dt), '-11-27'))
@@ -90,83 +103,90 @@ DELETE FROM proper_of_seasons
 WHERE dt > (
   SELECT max_dt FROM (
     SELECT MAX(dt) AS max_dt
-    FROM proper_of_seasons
-    join liturgical_day ld using (lit_day_id)
-    WHERE season='ADV' AND subseason='I' AND seq='1'
+    FROM proper_of_seasons ps_inner
+    join lit_epoch ld on ld.slug = ps_inner.lit_day_id AND ld.kind = 'day'
+    WHERE ld.season='ADV' AND ld.subseason='I' AND ld.seq='1'
   ) x
 );
-  
--- Fix liturgical year  
+
+-- Fix liturgical year
 UPDATE proper_of_seasons tgt
 JOIN proper_of_seasons adv_start
   ON YEAR(tgt.dt) = YEAR(adv_start.dt)
  and tgt.jurisdiction = adv_start.jurisdiction
-join liturgical_day ld
-  on ld.lit_day_id =adv_start.lit_day_id 
+join lit_epoch ld
+  on ld.slug = adv_start.lit_day_id
+  AND ld.kind = 'day'
  AND ld.season = 'ADV'
  AND ld.subseason = 'I'
  AND ld.seq = 1
  set tgt.liturgical_year = year(tgt.dt) + 1
  where tgt.dt >= adv_start.dt;
-   
-  
+
+
 -- Epiphany
 update proper_of_seasons ps
-join liturgical_day ld
-on season ='NAT' and subseason='EPI' and seq=0 and wknum=0
-set ps.lit_day_id = ld.lit_day_id 
+join lit_epoch ld
+on ld.kind = 'day'
+and ld.season ='NAT' and ld.subseason='EPI' and ld.seq=0 and ld.wknum=0
+set ps.lit_day_id = ld.slug
 where month(dt)=1 and day(dt)=6 and jurisdiction = 'UNIVERSAL';
 
 
 -- Baptism of the Lord
 update proper_of_seasons ps
-join liturgical_day ld
-on season ='NAT' and subseason='BAPT'
-set ps.lit_day_id = ld.lit_day_id 
+join lit_epoch ld
+on ld.kind = 'day'
+and ld.season ='NAT' and ld.subseason='BAPT'
+set ps.lit_day_id = ld.slug
 where wkday = 1
     and jurisdiction = 'UNIVERSAL'
     and month(dt)=1 and day(dt) between 7 and 13;
 
-    
+
 -- Easter Sunday
 update proper_of_seasons ps
-join liturgical_day ld
-on season='PASC' and subseason='OCT' and wknum=1 and seq=1
-set ps.lit_day_id = ld.lit_day_id 
+join lit_epoch ld
+on ld.kind = 'day'
+and ld.season='PASC' and ld.subseason='OCT' and ld.wknum=1 and ld.seq=1
+set ps.lit_day_id = ld.slug
 where ps.dt in (select dt from dates_for_easter);
 
 
- 
+
 -- Advent before Dec 17
 UPDATE proper_of_seasons tgt
 JOIN proper_of_seasons adv_start
   ON YEAR(tgt.dt) = YEAR(adv_start.dt)
  and tgt.jurisdiction = adv_start.jurisdiction
--- Identify the "start of Advent I" row via its liturgical_day attributes
-JOIN liturgical_day ld_start
-  ON ld_start.lit_day_id = adv_start.lit_day_id
+-- Identify the "start of Advent I" row via its lit_epoch attributes
+JOIN lit_epoch ld_start
+  ON ld_start.slug = adv_start.lit_day_id
+  AND ld_start.kind = 'day'
  AND ld_start.season     = 'ADV'
  AND ld_start.subseason  = 'I'
  and ld_start.wknum      = 1
  AND ld_start.seq        = 1
 -- Resolve the lit_day_id for each target date using computed wknum + seq
-JOIN liturgical_day ld_tgt
-  ON ld_tgt.season     = 'ADV'
+JOIN lit_epoch ld_tgt
+  ON ld_tgt.kind = 'day'
+ AND ld_tgt.season     = 'ADV'
  AND ld_tgt.subseason  = 'I'
  AND ld_tgt.wknum      = 1 + FLOOR(DATEDIFF(tgt.dt, adv_start.dt) / 7)
  AND ld_tgt.seq        = tgt.wkday
-SET tgt.lit_day_id = ld_tgt.lit_day_id
+SET tgt.lit_day_id = ld_tgt.slug
 WHERE tgt.dt BETWEEN adv_start.dt
                 AND STR_TO_DATE(CONCAT(YEAR(adv_start.dt), '-12-16'), '%Y-%m-%d');
 
--- Dec 17–24 “O Antiphons” stretch
+-- Dec 17-24 "O Antiphons" stretch
 UPDATE proper_of_seasons tgt
-JOIN liturgical_day ld_tgt
-  ON ld_tgt.season     = 'ADV'
+JOIN lit_epoch ld_tgt
+  ON ld_tgt.kind = 'day'
+ AND ld_tgt.season     = 'ADV'
  AND ld_tgt.subseason  = 'II'
  AND ld_tgt.wknum      = 0
  AND ld_tgt.seq        = datediff( tgt.dt, date(concat(year(dt),'-12-16') ) )
- SET tgt.lit_day_id = ld_tgt.lit_day_id
+ SET tgt.lit_day_id = ld_tgt.slug
 WHERE tgt.dt BETWEEN STR_TO_DATE(CONCAT(YEAR(tgt.dt), '-12-17'), '%Y-%m-%d')
                 AND STR_TO_DATE(CONCAT(YEAR(tgt.dt), '-12-24'), '%Y-%m-%d');
 
@@ -174,8 +194,9 @@ WHERE tgt.dt BETWEEN STR_TO_DATE(CONCAT(YEAR(tgt.dt), '-12-17'), '%Y-%m-%d')
 
 -- Nativity before Epiphany
 update proper_of_seasons ps
-JOIN liturgical_day ld
-  on ld.season = 'NAT'
+JOIN lit_epoch ld
+  on ld.kind = 'day'
+ and ld.season = 'NAT'
  and ld.subseason = case when ps.dt=date(concat( liturgical_year-1 ,'-12-25'))
                     then 'DAY'
                      when ps.dt < date(concat(liturgical_year,'-01-01') )
@@ -186,25 +207,25 @@ JOIN liturgical_day ld
  and ld.seq = case when ps.dt=date(concat( liturgical_year-1 ,'-12-25'))       -- Christmas Day
                     then 0
                 when ps.dt < date(concat(liturgical_year,'-01-01') )       -- Infra Octavam
-                    then case 
+                    then case
                         when ps.wkday=1                    -- Holy Family on Sunday
                             then 0
                         when day(ps.dt)=30 and ps.wkday=6     -- Holy Family on Dec 30
                             then 0
                         else
-                           datediff( ps.dt, concat( liturgical_year-1 ,'-12-25') ) 
+                           datediff( ps.dt, concat( liturgical_year-1 ,'-12-25') )
                     end
                 when ps.dt = date(concat(liturgical_year,'-01-01') )       -- Octave
                     then 0
                 else                                                    -- Post Octavam
                     datediff( ps.dt, concat( liturgical_year ,'-01-01') )
                 end
- SET ps.lit_day_id = ld.lit_day_id
+ SET ps.lit_day_id = ld.slug
 where ps.dt BETWEEN
       DATE(CONCAT(liturgical_year-1, '-12-25'))
       AND
       DATE(CONCAT(liturgical_year, '-1-05'));
-     
+
 
 
 
@@ -216,9 +237,10 @@ join proper_of_seasons epi
 on
     ps.liturgical_year = epi.liturgical_year
     and epi.jurisdiction = ps.jurisdiction
-join liturgical_day ld_epi
+join lit_epoch ld_epi
 on
-    epi.lit_day_id = ld_epi.lit_day_id
+    epi.lit_day_id = ld_epi.slug
+    and ld_epi.kind = 'day'
     and ld_epi.season = 'NAT'
     and ld_epi.subseason = 'EPI'
     and ld_epi.seq = 0
@@ -226,19 +248,21 @@ join proper_of_seasons bapt
 on
     ps.liturgical_year = bapt.liturgical_year
     and bapt.jurisdiction = ps.jurisdiction
-join liturgical_day ld_bapt
+join lit_epoch ld_bapt
 on
-    ld_bapt.lit_day_id = bapt.lit_day_id
+    ld_bapt.slug = bapt.lit_day_id
+    and ld_bapt.kind = 'day'
     and ld_bapt.season = 'NAT'
     and ld_bapt.subseason = 'BAPT'
     and ld_bapt.seq = 0
-join liturgical_day ld
+join lit_epoch ld
 on
-    ld.season = 'NAT'
+    ld.kind = 'day'
+    and ld.season = 'NAT'
     and ld.subseason = 'EPI'
     and ld.seq = datediff(ps.dt, epi.dt)
 set
-    ps.lit_day_id = ld.lit_day_id
+    ps.lit_day_id = ld.slug
 where
     ps.dt between (
         epi.dt + interval 1 day
@@ -254,19 +278,21 @@ join proper_of_seasons de
 on
     de.liturgical_year = ps.liturgical_year
     and de.jurisdiction = ps.jurisdiction
-join liturgical_day ld_de
+join lit_epoch ld_de
 on
-    de.lit_day_id = ld_de.lit_day_id
+    de.lit_day_id = ld_de.slug
+    and ld_de.kind = 'day'
     and ld_de.season = 'PASC'
     and ld_de.subseason = 'OCT'
     and ld_de.wknum = 1
     and ld_de.seq = 1
-join liturgical_day ld
+join lit_epoch ld
 on
-    ld.season = 'PASC'
+    ld.kind = 'day'
+    and ld.season = 'PASC'
     and ld.wknum = week(ps.dt) - week(de.dt) + 1
     and ld.seq = ps.wkday
-    and ld.subseason = case 
+    and ld.subseason = case
         when ld.wknum=1 or (ld.wknum=2 and ld.seq=1)
             then 'OCT'
         when ld.wknum=8
@@ -278,9 +304,9 @@ on
         else 'AD_ASC'
     end
 set
-    ps.lit_day_id = ld.lit_day_id
+    ps.lit_day_id = ld.slug
 where
-    ps.dt between de.dt 
+    ps.dt between de.dt
     and
     de.dt + interval 49 day;
 
@@ -292,20 +318,22 @@ join proper_of_seasons de
 on
     de.liturgical_year = ps.liturgical_year
     and de.jurisdiction = ps.jurisdiction
-join liturgical_day ld_de
+join lit_epoch ld_de
 on
-    de.lit_day_id = ld_de.lit_day_id
+    de.lit_day_id = ld_de.slug
+    and ld_de.kind = 'day'
     and ld_de.season = 'PASC'
     and ld_de.subseason = 'OCT'
     and ld_de.wknum = 1
     and ld_de.seq = 1
-join liturgical_day ld
-on ld.season='TQ'
+join lit_epoch ld
+on ld.kind = 'day'
+and ld.season='TQ'
 and ( ( ld.subseason='LENT' and ld.wknum = week(ps.dt) - week(de.dt) + 7 )
     or ( ld.subseason='HOLYWEEK' and ld.wknum=0 and week(ps.dt) - week(de.dt) + 7 = 6))
 and ld.seq = ps.wkday
-set ps.lit_day_id=ld.lit_day_id
-where ps.dt between de.dt - interval 46 day 
+set ps.lit_day_id=ld.slug
+where ps.dt between de.dt - interval 46 day
     and de.dt - interval 1 day ;
 
 
@@ -313,74 +341,142 @@ where ps.dt between de.dt - interval 46 day
 update proper_of_seasons ps
 join proper_of_seasons bapt
 on ps.liturgical_year = bapt.liturgical_year
-join liturgical_day ld_bapt
-on bapt.lit_day_id=ld_bapt.lit_day_id 
+join lit_epoch ld_bapt
+on bapt.lit_day_id=ld_bapt.slug
+and ld_bapt.kind = 'day'
 and ld_bapt.subseason='BAPT'
 join proper_of_seasons tq
 on ps.liturgical_year = tq.liturgical_year
-join liturgical_day ld_tq
-on tq.lit_day_id = ld_tq.lit_day_id 
+join lit_epoch ld_tq
+on tq.lit_day_id = ld_tq.slug
+and ld_tq.kind = 'day'
 and ld_tq.season ='TQ' and ld_tq.subseason='LENT' and ld_tq.wknum=0 and ld_tq.seq=4
-join liturgical_day ld
+join lit_epoch ld
 on
-    ld.season='OT'
+    ld.kind = 'day'
+    and ld.season='OT'
     and ld.subseason='OT'
     and ld.wknum=week(ps.dt)-week(bapt.dt)+1
     and ld.seq=ps.wkday
-set ps.lit_day_id = ld.lit_day_id 
+set ps.lit_day_id = ld.slug
 where ps.dt between bapt.dt + interval 1 day and tq.dt - interval 1 day;
 
 
 update proper_of_seasons ps
 join proper_of_seasons pent
-on ps.liturgical_year=pent.liturgical_year 
-and ps.jurisdiction=pent.jurisdiction 
-join liturgical_day ld_pent
-on pent.lit_day_id=ld_pent.lit_day_id 
+on ps.liturgical_year=pent.liturgical_year
+and ps.jurisdiction=pent.jurisdiction
+join lit_epoch ld_pent
+on pent.lit_day_id=ld_pent.slug
+and ld_pent.kind = 'day'
 and ld_pent.subseason='PENT'
 join proper_of_seasons adv
-on (ps.liturgical_year+1)=adv.liturgical_year 
-and ps.jurisdiction=adv.jurisdiction 
-join liturgical_day ld_adv
-on adv.lit_day_id =ld_adv.lit_day_id 
+on (ps.liturgical_year+1)=adv.liturgical_year
+and ps.jurisdiction=adv.jurisdiction
+join lit_epoch ld_adv
+on adv.lit_day_id =ld_adv.slug
+and ld_adv.kind = 'day'
 and ld_adv.season='ADV' and ld_adv.subseason='I' and ld_adv.wknum=1 and ld_adv.seq=1
-join liturgical_day ld
+join lit_epoch ld
 on
-    ld.season='OT'
+    ld.kind = 'day'
+    and ld.season='OT'
     and ld.subseason='OT'
     and ld.wknum=week(ps.dt)-week(adv.dt)+35
-    and ld.seq=ps.wkday 
-set ps.lit_day_id=ld.lit_day_id 
+    and ld.seq=ps.wkday
+set ps.lit_day_id=ld.slug
 where ps.dt between pent.dt + interval 1 day and adv.dt - interval 1 day;
 
 
--- Sunday of the Most Holy Trinity
+-- Sunday of the Most Holy Trinity (OT-FOL-00-1, seq=1) - Sunday after Pentecost
 update proper_of_seasons ps
 join proper_of_seasons pent
-on ps.liturgical_year=pent.liturgical_year 
-and ps.jurisdiction=pent.jurisdiction 
-join liturgical_day ld_pent
-on pent.lit_day_id=ld_pent.lit_day_id 
+on ps.liturgical_year=pent.liturgical_year
+and ps.jurisdiction=pent.jurisdiction
+join lit_epoch ld_pent
+on pent.lit_day_id=ld_pent.slug
+and ld_pent.kind = 'day'
 and ld_pent.subseason='PENT'
-join liturgical_day ld
+join lit_epoch ld
 on
-    ld.season='OT'
+    ld.kind = 'day'
+    and ld.season='OT'
     and ld.subseason='FOL'
     and ld.wknum=0
-    and ld.seq=0
-set ps.lit_day_id = ld.lit_day_id 
+    and ld.seq=1
+set ps.lit_day_id = ld.slug
 where ps.dt = pent.dt + interval 7 day;
+
+-- The Most Holy Body and Blood of Christ / Corpus Christi (OT-FOL-00-2, seq=2)
+-- Universal calendar: Thursday after Trinity Sunday. US override (Sunday) below.
+update proper_of_seasons ps
+join proper_of_seasons pent
+on ps.liturgical_year=pent.liturgical_year
+and ps.jurisdiction=pent.jurisdiction
+join lit_epoch ld_pent
+on pent.lit_day_id=ld_pent.slug
+and ld_pent.kind = 'day'
+and ld_pent.subseason='PENT'
+join lit_epoch ld
+on
+    ld.kind = 'day'
+    and ld.season='OT'
+    and ld.subseason='FOL'
+    and ld.wknum=0
+    and ld.seq=2
+set ps.lit_day_id = ld.slug
+where ps.dt = pent.dt + interval 11 day;
+
+-- Most Sacred Heart of Jesus (OT-FOL-00-3, seq=3)
+-- Friday after the octave of Corpus Christi (19 days after Pentecost). Same date in every jurisdiction.
+update proper_of_seasons ps
+join proper_of_seasons pent
+on ps.liturgical_year=pent.liturgical_year
+and ps.jurisdiction=pent.jurisdiction
+join lit_epoch ld_pent
+on pent.lit_day_id=ld_pent.slug
+and ld_pent.kind = 'day'
+and ld_pent.subseason='PENT'
+join lit_epoch ld
+on
+    ld.kind = 'day'
+    and ld.season='OT'
+    and ld.subseason='FOL'
+    and ld.wknum=0
+    and ld.seq=3
+set ps.lit_day_id = ld.slug
+where ps.dt = pent.dt + interval 19 day;
+
+-- Our Lord Jesus Christ, King of the Universe (OT-FOL-00-4, seq=4)
+-- Sunday before Advent I. Same date in every jurisdiction.
+update proper_of_seasons ps
+join proper_of_seasons adv
+on (ps.liturgical_year+1)=adv.liturgical_year
+and ps.jurisdiction=adv.jurisdiction
+join lit_epoch ld_adv
+on adv.lit_day_id=ld_adv.slug
+and ld_adv.kind = 'day'
+and ld_adv.season='ADV' and ld_adv.subseason='I' and ld_adv.wknum=1 and ld_adv.seq=1
+join lit_epoch ld
+on
+    ld.kind = 'day'
+    and ld.season='OT'
+    and ld.subseason='FOL'
+    and ld.wknum=0
+    and ld.seq=4
+set ps.lit_day_id = ld.slug
+where ps.dt = adv.dt - interval 7 day;
 
 -- - US OVERRIDES
 -- Epiphany - US
-insert into proper_of_seasons 
+insert into proper_of_seasons
 (dt, lit_day_id , jurisdiction, liturgical_year)
 (
 select dt,
-    (select lit_day_id from liturgical_day
-        where season='NAT' and subseason='EPI' and wknum=0 and seq=0)
-    , 'US', liturgical_year 
-from proper_of_seasons 
+    (select slug from lit_epoch
+        where kind='day' and season='NAT' and subseason='EPI' and wknum=0 and seq=0)
+    , 'US', liturgical_year
+from proper_of_seasons
 where wkday = 1 and month(dt) =1 and dayofmonth(dt) between 2 and 8 );
 
 
@@ -398,8 +494,9 @@ FROM (
             ELSE u.dt
         END AS us_dt
     FROM proper_of_seasons u
-    JOIN liturgical_day ld
-      ON ld.lit_day_id = u.lit_day_id
+    JOIN lit_epoch ld
+      ON ld.slug = u.lit_day_id
+      AND ld.kind = 'day'
     WHERE u.jurisdiction = 'UNIVERSAL'
       AND ld.season = 'NAT'
       AND ld.subseason = 'BAPT'
@@ -419,8 +516,8 @@ bapt AS (
     WHERE jurisdiction = 'US'
       AND lit_day_id IS NOT NULL
       AND lit_day_id IN (
-          SELECT lit_day_id FROM liturgical_day
-          WHERE season = 'NAT' AND subseason = 'BAPT'
+          SELECT slug FROM lit_epoch
+          WHERE kind='day' AND season = 'NAT' AND subseason = 'BAPT'
       )
 ),
 epi AS (
@@ -429,8 +526,8 @@ epi AS (
     WHERE jurisdiction = 'US'
       AND lit_day_id IS NOT NULL
       AND lit_day_id IN (
-          SELECT lit_day_id FROM liturgical_day
-          WHERE season = 'NAT' AND subseason = 'EPI'
+          SELECT slug FROM lit_epoch
+          WHERE kind='day' AND season = 'NAT' AND subseason = 'EPI'
       )
 ),
 dates AS (
@@ -442,7 +539,7 @@ SELECT
     dts.dt,
     'US' AS jurisdiction,
     dts.liturgical_year,
-    ld.lit_day_id
+    ld.slug AS lit_day_id
 FROM dates dts
 JOIN bapt bp
   ON dts.liturgical_year = bp.liturgical_year
@@ -450,8 +547,9 @@ JOIN bapt bp
 JOIN epi ep
   ON dts.liturgical_year = ep.liturgical_year
  AND dts.dt > ep.dt
-JOIN liturgical_day ld
-  ON ld.season    = 'NAT'
+JOIN lit_epoch ld
+  ON ld.kind = 'day'
+ AND ld.season    = 'NAT'
  AND ld.subseason = 'EPI'
  AND ld.wknum     = 0
  AND ld.seq       = DATEDIFF(dts.dt, ep.dt);
@@ -462,8 +560,9 @@ WITH us_epi AS (
     -- US Epiphany day (seq=0) for each liturgical year
     SELECT ps.dt, ps.liturgical_year
     FROM proper_of_seasons ps
-    JOIN liturgical_day ld
-      ON ld.lit_day_id = ps.lit_day_id
+    JOIN lit_epoch ld
+      ON ld.slug = ps.lit_day_id
+      AND ld.kind = 'day'
     WHERE ps.jurisdiction = 'US'
       AND ld.season = 'NAT'
       AND ld.subseason = 'EPI'
@@ -488,10 +587,11 @@ SELECT
     c.dt,
     'US' AS jurisdiction,
     c.liturgical_year,
-    ld.lit_day_id
+    ld.slug AS lit_day_id
 FROM candidates c
-JOIN liturgical_day ld
-  ON ld.season    = 'NAT'
+JOIN lit_epoch ld
+  ON ld.kind = 'day'
+ AND ld.season    = 'NAT'
  AND ld.subseason = 'PO'
  AND ld.seq       = CASE DAYOFMONTH(c.dt)
                         WHEN 6 THEN 5
@@ -505,12 +605,14 @@ SELECT
     u.dt,
     'US' AS jurisdiction,
     u.liturgical_year,
-    ld_us.lit_day_id
+    ld_us.slug AS lit_day_id
 FROM proper_of_seasons u
-JOIN liturgical_day ld_u
-  ON ld_u.lit_day_id = u.lit_day_id
-JOIN liturgical_day ld_us
-  ON ld_us.season    = ld_u.season
+JOIN lit_epoch ld_u
+  ON ld_u.slug = u.lit_day_id
+  AND ld_u.kind = 'day'
+JOIN lit_epoch ld_us
+  ON ld_us.kind = 'day'
+  AND ld_us.season    = ld_u.season
  AND ld_us.wknum      = ld_u.wknum
  AND ld_us.seq        = ld_u.seq
  AND ld_us.subseason  = 'AD_ASC'
@@ -526,12 +628,14 @@ SELECT
     u.dt,
     'US' AS jurisdiction,
     u.liturgical_year,
-    ld_us.lit_day_id
+    ld_us.slug AS lit_day_id
 FROM proper_of_seasons u
-JOIN liturgical_day ld_u
-  ON ld_u.lit_day_id = u.lit_day_id
-JOIN liturgical_day ld_us
-  ON ld_us.subseason  = 'ASC'
+JOIN lit_epoch ld_u
+  ON ld_u.slug = u.lit_day_id
+  AND ld_u.kind = 'day'
+JOIN lit_epoch ld_us
+  ON ld_us.kind = 'day'
+  AND ld_us.subseason  = 'ASC'
 WHERE u.jurisdiction = 'UNIVERSAL'
   AND u.wkday = 1
   AND ld_u.season = 'PASC'
@@ -539,15 +643,33 @@ WHERE u.jurisdiction = 'UNIVERSAL'
   AND ld_u.seq = 1;
 
 
+-- Corpus Christi - US (transferred from Thursday to the following Sunday)
+INSERT IGNORE INTO proper_of_seasons (dt, jurisdiction, liturgical_year, lit_day_id)
+SELECT
+    u.dt + INTERVAL 3 DAY,
+    'US' AS jurisdiction,
+    u.liturgical_year,
+    u.lit_day_id
+FROM proper_of_seasons u
+JOIN lit_epoch ld_u
+  ON ld_u.slug = u.lit_day_id
+  AND ld_u.kind = 'day'
+WHERE u.jurisdiction = 'UNIVERSAL'
+  AND ld_u.season = 'OT'
+  AND ld_u.subseason = 'FOL'
+  AND ld_u.wknum = 0
+  AND ld_u.seq = 2;
 
--- 
+
+
+--
 select pos.*, ld.title from proper_of_seasons pos
-left join liturgical_day ld on pos.lit_day_id = ld.lit_day_id 
+left join lit_epoch ld on pos.lit_day_id = ld.slug
 order by dt, jurisdiction;
 
 select pos.*, ld.title from proper_of_seasons pos
-left join liturgical_day ld on pos.lit_day_id = ld.lit_day_id 
-where season is null or subseason is null or wknum is null or seq is null
+left join lit_epoch ld on pos.lit_day_id = ld.slug
+where ld.season is null or ld.subseason is null or ld.wknum is null or ld.seq is null
 order by dt, jurisdiction;
 
 SELECT MAX(diff) AS max_gap
