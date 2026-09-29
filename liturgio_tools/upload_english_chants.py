@@ -342,7 +342,7 @@ def insert_local_chant(engine, row: dict) -> None:
     with engine.begin() as conn:
         conn.execute(sqlt("""
             INSERT INTO local_chants
-                (local_chant_id, chant_group_id, version, incipit, `office-part`,
+                (local_chant_id, chant_group_id, version, incipit, office_part,
                  mode, transcriber, commentary, gabc, translation_source_code,
                  is_text_exact, notes, status)
             VALUES
@@ -504,7 +504,7 @@ def fetch_existing_chant(engine, chant_group_id: int, version: str) -> dict | No
     from sqlalchemy import text as sqlt
     with engine.connect() as conn:
         row = conn.execute(sqlt("""
-            SELECT local_chant_id, gabc, incipit, `office-part` AS part, mode,
+            SELECT local_chant_id, gabc, incipit, office_part AS part, mode,
                    transcriber, commentary, translation_source_code, is_text_exact, notes
               FROM local_chants
              WHERE chant_group_id = :cgid AND version = :ver
@@ -537,7 +537,7 @@ def update_local_chant(engine, row: dict, local_chant_id: str) -> None:
         conn.execute(sqlt("""
             UPDATE local_chants
                SET incipit                = :incipit,
-                   `office-part`          = :part,
+                   office_part            = :part,
                    mode                   = :mode,
                    transcriber            = :transcriber,
                    commentary             = :commentary,

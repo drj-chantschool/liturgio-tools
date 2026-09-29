@@ -38,6 +38,7 @@ def load_chants(myquery: str, error: str = 'ask') -> Iterator[GBChant]:
                         raise
                 elif error == 'fail':
                     raise
-            except:
+            except Exception as e:
                 print(row)
-                raise
+                print(f'***** SKIPPED (id={row.get("id")}): {e} *****')
+                continue

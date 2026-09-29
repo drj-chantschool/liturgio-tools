@@ -1,3 +1,4 @@
+-- ARCHIVED 2026-06-19: logic folded into make-lit-epoch.sql; liturgical_day table dropped (re-root). Kept for reference.
 
 drop table if exists liturgical_day;
 
@@ -27,23 +28,23 @@ with nums as (
     where help_topic_id < 300
 )
 , fulllist as (
-    select 
+    select
         season
-        , subseason 
+        , subseason
         , wknums.mynum as wknum
         , seqs.mynum as seq
         , ls.season_rnk
         , ls.subseason_order
-    from liturgical_subseasons ls 
+    from liturgical_subseasons ls
     join nums wknums
     join nums seqs
-    on wknums.mynum between ls.minwk and ls.maxwk 
-    and seqs.mynum between ls.minseq and ls.maxseq 
+    on wknums.mynum between ls.minwk and ls.maxwk
+    and seqs.mynum between ls.minseq and ls.maxseq
 )
 , filtered as (
 select *
 from fulllist
-where 
+where
     not ( season='ADV' and subseason='I' and wknum=3 and seq=7) -- Third Saturday of Advent is always an O Antiphon
     and not (season='TQ' and subseason='LENT' and wknum=0 and seq<4) -- Partial week of Ash Wednesday
     and not (season='PASC' and subseason='AD_ASC' and wknum=2 and seq=1) -- Divine Mercy Sunday is part of the Octave
@@ -57,42 +58,42 @@ rank() over (order by season_rnk, subseason_order, wknum, seq) as lit_day_order
             subseason,
             '-', LPAD(wknum, 2, '0'),
             '-', LPAD(seq,   1, '0')
-        ) as lit_day_id 
+        ) as lit_day_id
 , season, subseason, wknum, seq
 from filtered
 order by 1;
 
 update liturgical_day
-join p_liturgical_day_slug_overrides 
+join p_liturgical_day_slug_overrides
 using (lit_day_id)
 set slug=slug_ovr
 where slug_ovr is not null;
 
 
 update liturgical_day
-join p_liturgical_day_slug_overrides 
+join p_liturgical_day_slug_overrides
 using (lit_day_id)
 set title=title_ovr
 where title_ovr is not null;
 
 UPDATE liturgical_day
-SET slug = 
-    case 
+SET slug =
+    case
         when season='ADV' and subseason='II'
-        then case 
-            when seq=1 
+        then case
+            when seq=1
                 then 'O-SAPIENTIA'
             when seq=2
                 then 'O-ADONAI'
             when seq=3
                 then 'O-RADIX-JESSE'
-            when seq=4 
+            when seq=4
                 then 'O-CLAVIS-DAVID'
-            when seq=5 
+            when seq=5
                 then 'O-ORIENS'
-            when seq=6 
+            when seq=6
                 then 'O-REX-GENTIUM'
-            when seq=7 
+            when seq=7
                 then 'O-EMMANUEL'
             when seq=8
                 then 'DEC24'
@@ -109,22 +110,22 @@ SET slug =
     end
 WHERE slug IS NULL;
 
-update liturgical_day 
+update liturgical_day
 set title=concat(
          ELT( seq, 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday')
     , ' within the octave of '
-    , case season 
+    , case season
         when 'ADV' then 'Advent'
         when 'NAT' then 'the Nativity'
         when 'TQ' then 'Lent'
-        when 'PASC' then 'Easter' 
-        when 'OT' then 'Ordinary Time' 
+        when 'PASC' then 'Easter'
+        when 'OT' then 'Ordinary Time'
         end
 )
 where title is null
 and subseason in ('IO','OCT');
 
-update liturgical_day 
+update liturgical_day
 set title=concat(
          ELT( seq, 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday')
     , ' of Holy Week'
@@ -132,7 +133,7 @@ set title=concat(
 where title is null
 and subseason in ('HOLYWEEK');
 
-update liturgical_day 
+update liturgical_day
 set title=concat(
     cast(seq as char)
     , case when seq=1 then 'st' when seq in (2,22,32) then 'nd' when seq in (3,23, 33) then 'rd' else 'th' end
@@ -141,7 +142,7 @@ set title=concat(
 where title is null
 and subseason='EPI';
 
-update liturgical_day 
+update liturgical_day
 set title=concat(
     case when seq <> 1 then concat(
              ELT( seq, 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday')
@@ -152,13 +153,12 @@ set title=concat(
     , ' '
     ,  case when seq = 1 then 'Sunday' else 'week' end
     , ' of '
-    , case season 
+    , case season
         when 'ADV' then 'Advent'
         when 'NAT' then 'the Nativity'
         when 'TQ' then 'Lent'
-        when 'PASC' then 'Easter' 
-        when 'OT' then 'Ordinary Time' 
+        when 'PASC' then 'Easter'
+        when 'OT' then 'Ordinary Time'
         end
 )
 where title is null;
-

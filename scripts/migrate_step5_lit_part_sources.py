@@ -7,7 +7,7 @@ files under liturgio-tools/sql/:
     - snapshot lit_part_texts -> lit_part_texts_backup_step5 (once)
     - RENAME lit_part_texts -> lit_part_sources
     - ADD status flag (draft/reviewed/published vocabulary, matching local_chants)
-    - ADD provenance columns (book, pdf_page_num, bbox) + composite FK to books
+    - ADD provenance columns (book, printed_page_num, bbox)
     - CREATE books, lit_text_chant_link, tocs
 
 Usage:
@@ -59,13 +59,12 @@ def constraint_exists(conn, table, name):
 CREATE_BOOKS = """
 CREATE TABLE IF NOT EXISTS books (
     book             VARCHAR(40)  NOT NULL,
-    pdf_page_num     INT          NOT NULL,
-    printed_page_num VARCHAR(16)  NULL,
+    printed_page_num VARCHAR(16)  NOT NULL,
     image_path       VARCHAR(512) NULL,
     image_blob       LONGBLOB     NULL,
     notes            VARCHAR(500) NULL,
     created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (book, pdf_page_num)
+    PRIMARY KEY (book, printed_page_num)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 
@@ -87,7 +86,6 @@ CREATE_TOCS = """
 CREATE TABLE IF NOT EXISTS tocs (
     toc_id       BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     book         VARCHAR(40) NOT NULL,
-    pdf_page_num INT NULL,
     hdr_txt      VARCHAR(500) NOT NULL,
     lvl          TINYINT NULL,
     created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -141,12 +139,6 @@ def run(conn, dry_run):
            "COMMENT 'source page provenance; extracted text+translation in "
            "original_text/vernacular_text replace the dropped reference_assets table'")
 
-    if column_exists(conn, 'lit_part_sources', 'pdf_page_num'):
-        print('  [skip] add pdf_page_num — already present')
-    else:
-        do('ADD COLUMN pdf_page_num',
-           'ALTER TABLE lit_part_sources ADD COLUMN pdf_page_num INT NULL')
-
     if column_exists(conn, 'lit_part_sources', 'bbox'):
         print('  [skip] add bbox — already present')
     else:
@@ -154,16 +146,7 @@ def run(conn, dry_run):
            "ALTER TABLE lit_part_sources ADD COLUMN bbox VARCHAR(64) NULL "
            "COMMENT 'bounding box or start-y of content on page, e.g. x,y,w,h'")
 
-    # books must exist before the FK can be created
     do('CREATE TABLE books', CREATE_BOOKS)
-
-    if constraint_exists(conn, 'lit_part_sources', 'fk_lps_book'):
-        print('  [skip] add fk_lps_book — already present')
-    else:
-        do('ADD CONSTRAINT fk_lps_book (composite FK -> books)',
-           'ALTER TABLE lit_part_sources '
-           'ADD CONSTRAINT fk_lps_book FOREIGN KEY (book, pdf_page_num) '
-           'REFERENCES books(book, pdf_page_num)')
 
     # 5. link table (note: chant_item_uid -> v_chant_item view, no real FK possible)
     do('CREATE TABLE lit_text_chant_link', CREATE_LINK)

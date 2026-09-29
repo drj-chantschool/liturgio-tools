@@ -191,15 +191,56 @@ def _load_saints(conn, jurisdiction: str) -> list[dict]:
 # Core resolution logic
 # ---------------------------------------------------------------------------
 
+class MissingNominalDateError(ValueError):
+    """A ``proper_of_saints`` row has a NULL ``month_nominal`` / ``day_nominal``.
+
+    ``month_nominal`` and ``day_nominal`` are nullable in the schema (both CHECKs
+    are ``IS NULL OR BETWEEN ...``), but the resolver has no way to place a saint
+    with no nominal date, and ``_load_saints`` loads every row unfiltered — so one
+    such row would otherwise take down the whole year's resolution with an opaque
+    ``TypeError: 'NoneType' object cannot be interpreted as an integer`` raised
+    from deep inside ``datetime.date``.
+
+    This is raised instead, deliberately and loudly: a NULL-dated sanctoral row is
+    a DATA defect to be fixed at the source (give the row a date, or — if the
+    observance is movable, like the Immaculate Heart — model it as a temporal
+    ``lit_epoch`` day node with no ``proper_of_saints`` row at all). It is NOT
+    something to skip past, because silently dropping the row would hide a saint
+    from the calendar with no signal.
+    """
+
+
 def _saint_nominal_date(saint: dict, civil_year: int) -> Optional[datetime.date]:
     """
     Compute the civil date of the saint's nominal feast in civil_year.
 
     Returns None for months/days that do not exist in that year (e.g.
     Feb 29 in a non-leap year).
+
+    Raises
+    ------
+    MissingNominalDateError
+        If the saint's ``month_nominal`` or ``day_nominal`` is NULL. This is a
+        data defect, not a skippable row — see the exception's docstring.
     """
     m = saint['month_nominal']
     d = saint['day_nominal']
+    if m is None or d is None:
+        missing = ', '.join(
+            name for name, value in (('month_nominal', m), ('day_nominal', d))
+            if value is None
+        )
+        raise MissingNominalDateError(
+            f"proper_of_saints row {saint.get('slug')!r} "
+            f"({saint.get('common_name')!r}) has NULL {missing} "
+            f"(month_nominal={m!r}, day_nominal={d!r}), so it has no nominal "
+            f"date to resolve in civil year {civil_year}. Every saint row the "
+            f"resolver loads must carry both a month and a day. Fix the row: "
+            f"either set its nominal date, or — if the observance is movable "
+            f"(computed from Easter/Pentecost rather than a fixed calendar "
+            f"date) — remove it from proper_of_saints and model it as a "
+            f"temporal lit_epoch day node instead."
+        )
     try:
         return datetime.date(civil_year, m, d)
     except ValueError:

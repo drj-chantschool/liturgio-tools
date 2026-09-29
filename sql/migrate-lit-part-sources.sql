@@ -64,3 +64,11 @@ ALTER TABLE lit_part_sources
     ADD CONSTRAINT fk_lps_epoch FOREIGN KEY (lit_epoch_slug)
         REFERENCES lit_epoch(slug)
         ON UPDATE CASCADE ON DELETE RESTRICT;
+
+-- ── Roadmap step 7e (2026-06-19): add display_name ───────────────────────
+-- Short human-readable label for UI/debugging: epoch title, part code, and
+-- text incipit (chant incipit → vernacular_text → original_text, first 60
+-- chars). Populated by scripts/migrate_step7e_display_name_on_lit_part_sources.py.
+ALTER TABLE lit_part_sources
+    ADD COLUMN display_name VARCHAR(300) NULL
+    COMMENT 'Human-readable label: epoch title, part code, and text incipit';

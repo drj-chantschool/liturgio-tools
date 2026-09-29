@@ -10,3 +10,6 @@ env/
 # Regenerable translation scrape data
 liturgio_tools/translations/*.json
 liturgio_tools/translations/raw/
+
+# One-off SQL backup dumps
+sql/archive/*_dump_*.sql

@@ -38,26 +38,25 @@ def _get_engine(user: str, db_name: str = 'liturgio'):
 # DDL
 # ---------------------------------------------------------------------------
 
-# books must exist before lit_part_sources (composite FK fk_lps_book).
 CREATE_BOOKS = """
 CREATE TABLE IF NOT EXISTS books (
     book             VARCHAR(40)  NOT NULL,
-    pdf_page_num     INT          NOT NULL,
-    printed_page_num VARCHAR(16)  NULL,
+    printed_page_num VARCHAR(16)  NOT NULL,
     image_path       VARCHAR(512) NULL,
     image_blob       LONGBLOB     NULL,
     notes            VARCHAR(500) NULL,
     created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (book, pdf_page_num)
+    PRIMARY KEY (book, printed_page_num)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 
 # Full lit_part_sources schema (roadmap step 5). A fresh load produces the
 # complete table: feast-day columns (month/day_of_month/feast_title/common_of,
 # formerly added by load_saints.py), the review-status flag, and source-page
-# provenance (book/pdf_page_num/bbox + composite FK to books). The dropped
+# provenance (book/printed_page_num/bbox). The dropped
 # 'reference_assets' role is folded in: extracted text + translation live in
-# original_text/vernacular_text, and the page is identified by book/pdf_page_num.
+# original_text/vernacular_text, and the page is identified by book/printed_page_num
+# (the PRINTED page number; the pdf page/image is derived via books).
 # Note: original_text and season are NULLable to allow feast/common-only rows.
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS lit_part_sources (
@@ -81,15 +80,16 @@ CREATE TABLE IF NOT EXISTS lit_part_sources (
     common_of          VARCHAR(200)    NULL,
     review_status      VARCHAR(20)     NOT NULL DEFAULT 'draft',
     book               VARCHAR(40)     NULL,
-    pdf_page_num       INT             NULL,
+    printed_page_num   INT             NULL,
     bbox               VARCHAR(64)     NULL,
     lit_epoch_slug     VARCHAR(64)     NULL,
     created_at         TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at         TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     KEY idx_lps_part (part_id),
     CONSTRAINT fk_lps_part FOREIGN KEY (part_id) REFERENCES service_part(part_id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    CONSTRAINT fk_lps_book FOREIGN KEY (book, pdf_page_num)
-        REFERENCES books(book, pdf_page_num),
+    -- NB: `printed_page_num` is the scanner-independent PRINTED page (source of truth); the
+    -- per-scan PDF page + image are looked up via books(book, printed_page_num). No FK to
+    -- books (printed_page_num is VARCHAR there; this is a derivable join, like ref_page_num).
     CONSTRAINT fk_lps_epoch FOREIGN KEY (lit_epoch_slug)
         REFERENCES lit_epoch(slug) ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

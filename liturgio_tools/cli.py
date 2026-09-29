@@ -424,7 +424,7 @@ def cmd_save_english(args):
     with engine.connect() as conn:
         conn.execute(text("""
             INSERT INTO local_chants
-                (local_chant_id, chant_group_id, version, incipit, `office-part`, mode,
+                (local_chant_id, chant_group_id, version, incipit, office_part, mode,
                  gabc, translation_source_code, source_citation, is_text_exact,
                  derived_from_uid, status, notes)
             VALUES

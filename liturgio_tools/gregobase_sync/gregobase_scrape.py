@@ -5,7 +5,7 @@ import time
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-from sqlalchemy import MetaData, Table, create_engine, select, text
+from sqlalchemy import MetaData, Table, create_engine, func, literal_column, select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 import logging
 
@@ -70,7 +70,7 @@ def parse_header_kv(header_text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for part in header_text.replace("\r\n", "\n").split(";"):
         part = part.strip()
-        if not part or ":" not in part:
+        if not part or ":" not in part or part in out:
             continue
         k, v = part.split(":", 1)
         out[k.strip().lower()] = v.strip()
@@ -363,9 +363,21 @@ def upsert_sync_state(conn, sync_state: Table, chant_id: int, gabc: str | None, 
     conn.execute(stmt)
 
 
+# Content fields that must never be overwritten with NULL if the DB already has a value.
+_NULL_PROTECT = {"gabc", "headers", "gabc_verses", "mode", "mode_var"}
+
 def upsert_chant(conn, chants: Table, row: dict):
     stmt = mysql_insert(chants).values(**row)
-    update_cols = {c.name: stmt.inserted[c.name] for c in chants.columns if c.name != "id"}
+    update_cols = {}
+    for c in chants.columns:
+        if c.name == "id":
+            continue
+        new_val = stmt.inserted[c.name]
+        if c.name in _NULL_PROTECT:
+            # Keep the existing DB value when the freshly scraped value is NULL
+            update_cols[c.name] = func.coalesce(new_val, literal_column(f"`{c.name}`"))
+        else:
+            update_cols[c.name] = new_val
     conn.execute(stmt.on_duplicate_key_update(**update_cols))
 
 def get_synced_ids(conn, sync_state: Table) -> set[int]:

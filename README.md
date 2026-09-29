@@ -51,23 +51,42 @@ stored password is rejected, it's deleted and you're re-prompted.
 
 Run the SQL files in `sql/` in this order:
 
-1. `make_param_tables.sql` — creates parameter and lookup tables used by
-   later scripts.
-2. `make-liturgical-day-name-overrides.sql` — creates and seeds
-   `p_liturgical_day_slug_overrides`.
-3. `make-liturgical-day.sql` — creates and populates `liturgical_day`.
-4. `insert_dates_for_easter.sql` — seeds `dates_for_easter`.
-5. `make-proper-of-seasons.sql` — creates and populates
-   `proper_of_seasons` using `liturgical_day` and `dates_for_easter`.
-6. `make-slot-candidate.sql` — creates chant and assignment tables plus the
-   `v_chant_item` view.
-7. `query-daily-mass-parts.sql` — run this after setup to query the parts
-   for a given day's Mass or Office.
+1. `make_param_tables.sql` — creates parameter and lookup tables
+   (`p_lit_rank`, `p_assignment_authority`, `p_translation_source`, etc.)
+   used by later scripts.
+2. `make_liturgical_season_tables.sql` — creates and seeds
+   `p_liturgical_seasons` (6 rows) and `p_liturgical_subseasons` (17 rows).
+3. `make-liturgical-day-name-overrides.sql` — creates and seeds
+   `p_liturgical_day_slug_overrides` (title/slug overrides for named days).
+4. `apply_p_lit_rank.py` (scripts/) — seeds `p_lit_rank` precedence table.
+   **Note:** only the `p_lit_rank` seeding portion is needed now;
+   any `liturgical_day` operations in that script are obsolete since
+   `liturgical_day` was dropped (step 7c, 2026-06-19).
+5. `make-proper-of-saints.sql` — creates and populates `proper_of_saints`
+   (saint/feast nodes; required for saint nodes in `lit_epoch`).
+6. `make-lit-epoch.sql` — self-contained: generates all day, week,
+   subseason, season, mass, and saint nodes plus the parent-child tree.
+   Sources day nodes directly from `p_liturgical_subseasons` (no
+   `liturgical_day` dependency). Rank rules are inlined.
+7. `insert_dates_for_easter.sql` — seeds `dates_for_easter`.
+8. `make-proper-of-seasons.sql` — creates and populates `proper_of_seasons`
+   by joining `lit_epoch` (kind='day') and `dates_for_easter`.
+9. `make-lit-observance-resolved.sql` — creates the resolved observance view.
+10. `make-slot-candidate.sql` — creates chant and assignment tables plus the
+    `v_chant_item` view.
+11. `query-daily-mass-parts.sql` — run this after setup to query the parts
+    for a given day's Mass or Office.
+
+**Archived (no longer part of the build):**
+- `sql/archive/make-liturgical-day.sql` — superseded; day-generation logic
+  is now inlined in `make-lit-epoch.sql`.
+- `sql/archive/set-liturgical-day-ranks.sql` — superseded; rank rules are
+  now inlined in `make-lit-epoch.sql`.
 
 Prerequisites not created in this repo:
 
-- `liturgical_subseasons` must already exist before running
-  `make-liturgical-day.sql`.
+- `p_liturgical_subseasons` must already exist (step 2 above) before running
+  `make-lit-epoch.sql`.
 - `dates_for_easter` must already exist before running
   `insert_dates_for_easter.sql`; that file only inserts rows.
 - `gregobase_chants` must already exist before running

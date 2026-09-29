@@ -1,3 +1,4 @@
+-- ARCHIVED 2026-06-19: logic folded into make-lit-epoch.sql; liturgical_day table dropped (re-root). Kept for reference.
 -- =============================================================================
 -- set-liturgical-day-ranks.sql
 -- Assign precedence ranks to all rows in liturgical_day.
@@ -71,14 +72,14 @@ UPDATE liturgical_day
    AND subseason = 'OT'
    AND seq = 1;
 
--- Rule 2: Ordinary Time weekdays (Mon–Sat)
+-- Rule 2: Ordinary Time weekdays (Mon-Sat)
 UPDATE liturgical_day
    SET lit_rank = 'WEEKDAY'
  WHERE season = 'OT'
    AND subseason = 'OT'
    AND seq <> 1;
 
--- Rule 3: Sundays of Advent (subseason I only — subseason II has no Sundays)
+-- Rule 3: Sundays of Advent (subseason I only - subseason II has no Sundays)
 UPDATE liturgical_day
    SET lit_rank = 'PRINCIPAL_TEMPORAL'
  WHERE season = 'ADV'
@@ -92,8 +93,8 @@ UPDATE liturgical_day
    AND subseason = 'I'
    AND seq <> 1;
 
--- Rule 5: Privileged weekdays of Advent II (Dec 17–24, O Antiphons + Dec 24)
---   seq values 1–7 = O Antiphons (Dec 17–23), seq=8 = DEC24.
+-- Rule 5: Privileged weekdays of Advent II (Dec 17-24, O Antiphons + Dec 24)
+--   seq values 1-7 = O Antiphons (Dec 17-23), seq=8 = DEC24.
 --   None are Sundays; all are PRIVILEGED_WEEKDAY.
 UPDATE liturgical_day
    SET lit_rank = 'PRIVILEGED_WEEKDAY'
@@ -108,14 +109,14 @@ UPDATE liturgical_day
 
 -- Rule 7: Lenten weekdays (TQ LENT, all non-Sundays including Ash Wed partial week)
 --   wknum=0, seq 4-7: Ash Wednesday + Thu/Fri/Sat after Ash Wednesday.
---   wknum 1-6, seq 2-7: Mon–Sat of Lenten weeks.
+--   wknum 1-6, seq 2-7: Mon-Sat of Lenten weeks.
 UPDATE liturgical_day
    SET lit_rank = 'PRIVILEGED_WEEKDAY'
  WHERE season = 'TQ'
    AND subseason = 'LENT'
    AND seq <> 1;
 
--- Rule 8: Holy Week Mon–Thu (PRINCIPAL_TEMPORAL)
+-- Rule 8: Holy Week Mon-Thu (PRINCIPAL_TEMPORAL)
 --   seq 2=Mon, 3=Tue, 4=Wed, 5=Holy Thursday (Chrism/Maundy)
 UPDATE liturgical_day
    SET lit_rank = 'PRINCIPAL_TEMPORAL'
@@ -123,7 +124,7 @@ UPDATE liturgical_day
    AND subseason = 'HOLYWEEK'
    AND seq IN (2, 3, 4, 5);
 
--- Rule 9: Triduum — Good Friday and Holy Saturday
+-- Rule 9: Triduum - Good Friday and Holy Saturday
 --   seq 6=Good Friday, 7=Holy Saturday (Easter Sunday override follows below)
 UPDATE liturgical_day
    SET lit_rank = 'TRIDUUM'
@@ -133,7 +134,7 @@ UPDATE liturgical_day
 
 -- Rule 10: All Easter-season Sundays (seq=1 across OCT, AD_ASC, POST_ASC, PENT)
 --   Includes PASCSUN (Easter Sunday, overridden to TRIDUUM below),
---   PASCOCT (Divine Mercy Sunday), and Sundays of weeks 3–7.
+--   PASCOCT (Divine Mercy Sunday), and Sundays of weeks 3-7.
 UPDATE liturgical_day
    SET lit_rank = 'PRINCIPAL_TEMPORAL'
  WHERE season = 'PASC'
@@ -198,13 +199,13 @@ UPDATE liturgical_day
 -- These win over all broad rules above.
 -- ---------------------------------------------------------------------------
 
--- Easter Sunday → TRIDUUM (highest rank; overrides PRINCIPAL_TEMPORAL from rule 10)
+-- Easter Sunday -> TRIDUUM (highest rank; overrides PRINCIPAL_TEMPORAL from rule 10)
 UPDATE liturgical_day SET lit_rank = 'TRIDUUM'          WHERE slug = 'PASCSUN';
 
 -- Christmas Day
 UPDATE liturgical_day SET lit_rank = 'PRINCIPAL_TEMPORAL' WHERE slug = 'NATIVITY';
 
--- Epiphany of the Lord (seq=0, already left UNDETERMINED by rules — safe either way)
+-- Epiphany of the Lord (seq=0, already left UNDETERMINED by rules - safe either way)
 UPDATE liturgical_day SET lit_rank = 'PRINCIPAL_TEMPORAL' WHERE slug = 'EPIPHANY';
 
 -- Baptism of the Lord

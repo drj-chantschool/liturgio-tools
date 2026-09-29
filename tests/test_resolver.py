@@ -41,6 +41,14 @@ Test scenarios
 5. Materialize round-trip (2028)
      Call materialize_year(engine, 'UNIVERSAL', 2028) and confirm rows appear
      in lit_observance_resolved matching the resolve_year() output.
+
+7. NULL nominal date fails cleanly (pure unit test, no DB)
+     month_nominal / day_nominal are nullable and _load_saints loads every row
+     unfiltered, so one NULL-dated proper_of_saints row used to kill the whole
+     year with an opaque TypeError from inside datetime.date. Assert
+     _saint_nominal_date now raises MissingNominalDateError naming the offending
+     slug and the NULL column(s) — and that it neither returns None nor skips.
+     Also asserts the benign Feb-29-in-a-non-leap-year case still returns None.
 """
 
 import datetime
@@ -59,6 +67,8 @@ from liturgio_tools.liturgical_calendar.resolver import (
     resolve_year,
     resolve_date,
     materialize_year,
+    _saint_nominal_date,
+    MissingNominalDateError,
 )
 
 
@@ -368,6 +378,77 @@ def test_materialize_round_trip(engine):
     print("  PASS")
 
 
+def test_null_nominal_date_raises_cleanly(engine=None):
+    """
+    7. NULL nominal date -> clean, explicit MissingNominalDateError.
+
+    month_nominal / day_nominal are nullable in proper_of_saints and _load_saints
+    loads every row unfiltered, so a single NULL-dated row reaches
+    _saint_nominal_date and used to kill the whole year's resolution with an
+    opaque `TypeError: 'NoneType' object cannot be interpreted as an integer`
+    from inside datetime.date. It must now fail LOUDLY and legibly instead:
+    name the offending slug and say what is NULL. It must NOT be skipped and
+    must NOT return None (None means "date does not exist this year", which is
+    a different, benign case that the resolver deliberately ignores).
+
+    Pure unit test — no DB needed; the `engine` arg exists only so run_all()
+    can call every test uniformly.
+    """
+    print("\n[7] NULL nominal date raises cleanly")
+
+    # --- control: valid dates still behave exactly as before ---------------
+    ok = _saint_nominal_date(
+        {'slug': 'st-mark', 'common_name': 'St Mark',
+         'month_nominal': 4, 'day_nominal': 25}, 2027)
+    assert ok == datetime.date(2027, 4, 25), f"FAIL: valid date gave {ok!r}"
+    print(f"  Valid date (4/25 in 2027) -> {ok} — PASS")
+
+    # Feb 29 in a non-leap year must STILL return None, not raise.
+    feb29 = _saint_nominal_date(
+        {'slug': 'nonexistent', 'common_name': 'Nonexistent',
+         'month_nominal': 2, 'day_nominal': 29}, 2027)
+    assert feb29 is None, f"FAIL: Feb 29 in 2027 gave {feb29!r}, expected None"
+    print("  Feb 29 in non-leap 2027 -> None (unchanged) — PASS")
+
+    # --- the fix: NULL month and/or day raises, naming the slug ------------
+    for label, saint in (
+        ('both NULL', {'slug': 'movable-thing', 'common_name': 'Movable Thing',
+                       'month_nominal': None, 'day_nominal': None}),
+        ('month NULL', {'slug': 'no-month', 'common_name': 'No Month',
+                        'month_nominal': None, 'day_nominal': 14}),
+        ('day NULL', {'slug': 'no-day', 'common_name': 'No Day',
+                      'month_nominal': 5, 'day_nominal': None}),
+    ):
+        try:
+            got = _saint_nominal_date(saint, 2027)
+        except MissingNominalDateError as exc:
+            msg = str(exc)
+            assert saint['slug'] in msg, (
+                f"FAIL ({label}): error message does not name the slug "
+                f"{saint['slug']!r}: {msg}"
+            )
+            assert 'month_nominal' in msg and 'day_nominal' in msg, (
+                f"FAIL ({label}): error message does not name the NULL "
+                f"column(s): {msg}"
+            )
+            assert isinstance(exc, ValueError), (
+                f"FAIL ({label}): {type(exc).__name__} is not a ValueError"
+            )
+            print(f"  {label}: raised MissingNominalDateError naming "
+                  f"{saint['slug']!r} — PASS")
+        except TypeError as exc:
+            raise AssertionError(
+                f"FAIL ({label}): still raising the opaque TypeError the fix "
+                f"was meant to replace: {exc}"
+            )
+        else:
+            raise AssertionError(
+                f"FAIL ({label}): did not raise, returned {got!r} — a NULL "
+                f"nominal date must not be silently skipped"
+            )
+    print("  PASS")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -383,6 +464,7 @@ def run_all():
         test_st_mark_transfers_as_proper_solemnity,
         test_assumption_no_collision,
         test_materialize_round_trip,
+        test_null_nominal_date_raises_cleanly,
     ]
 
     for t in tests:
