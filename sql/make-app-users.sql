@@ -43,3 +43,30 @@ CREATE TABLE IF NOT EXISTS app_user (
     UNIQUE KEY uq_app_user_username (username),
     CONSTRAINT fk_app_user_role FOREIGN KEY (role_code) REFERENCES p_app_role (role_code)
 );
+
+-- ------------------------------------------------------------
+-- Bearer API tokens (liturgio-api #6): non-interactive credentials
+-- for bots such as claude-bot. Only the SHA-256 of the token is
+-- stored; the token itself is printed once by
+-- `manage_users.py token create`. A token request may only GET and
+-- POST /api/edit_queue (auth.py), never /auth/* or the profile.
+-- user_epoch = app_user.session_epoch at creation: a password change
+-- or deactivation (both bump the epoch) kills the user's tokens, and
+-- re-enabling the user does not revive them.
+-- Like app_user, api_token lives only on DO: sync_to_do.py never
+-- copies it. On DO, liturgio_auth may stamp last_used_at:
+--   GRANT SELECT (token_id), UPDATE (last_used_at) ON liturgio.api_token TO 'liturgio_auth'@'%';
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS api_token (
+    token_id      INT UNSIGNED  NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id       INT UNSIGNED  NOT NULL,
+    token_hash    CHAR(64)      NOT NULL,       -- hex SHA-256 of the token
+    label         VARCHAR(120)  NULL,
+    user_epoch    INT UNSIGNED  NOT NULL,       -- app_user.session_epoch when created
+    created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at  DATETIME      NULL,           -- stamped at most every 5 min per instance
+    revoked_at    DATETIME      NULL,
+    UNIQUE KEY uq_api_token_hash (token_hash),
+    KEY ix_api_token_user (user_id),
+    CONSTRAINT fk_api_token_user FOREIGN KEY (user_id) REFERENCES app_user (user_id)
+);
