@@ -1,3 +1,4 @@
+-- SUPERSEDED 2026-10-19 by make-book-toc.sql (table `book_toc`). This `tocs` table was never created; do not run.
 -- tocs: table-of-contents / heading entries extracted from source books.
 -- Each row is one header found at a page in a book, with an optional nesting level.
 CREATE TABLE IF NOT EXISTS tocs (

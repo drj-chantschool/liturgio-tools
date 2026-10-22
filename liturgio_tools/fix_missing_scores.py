@@ -25,6 +25,7 @@ import json
 import argparse
 import getpass
 import logging
+import unicodedata
 from pathlib import Path
 
 from gabc_tools.gbchant import extract_gabc_body
@@ -637,6 +638,22 @@ def _is_auth_error(exc: Exception) -> bool:
     return 'access denied' in msg or '1045' in msg
 
 
+LIGATURES = {'æ': 'ae', 'Æ': 'Ae', 'œ': 'oe', 'Œ': 'Oe'}
+
+
+def fold_incipit(incipit: str) -> str:
+    """
+    'Rorate cǽli… Et justítia' -> 'rorate-caeli-et-justitia'
+    Strips accents, expands æ/œ ligatures, and turns any run of
+    non-alphanumerics into a single '-', so DB incipits compare cleanly
+    against ASCII kebab-case directory names.
+    """
+    s = ''.join(LIGATURES.get(ch, ch) for ch in incipit or '')
+    s = unicodedata.normalize('NFKD', s)
+    s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+    return re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')
+
+
 def incipit_dir_to_text(incipit_dir: str) -> str:
     """'christus-factus-est' -> 'Christus factus est'"""
     words = incipit_dir.replace('-', ' ').split()
@@ -728,7 +745,7 @@ def db_candidates(engine, chant_type: str, incipit_dir: str, filename: str) -> l
     query = text("""
         SELECT id, incipit, headers, gabc, `office-part`, mode, version, transcriber
         FROM gregobase_chants
-        WHERE LOWER(incipit) LIKE LOWER(:pat)
+        WHERE REPLACE(REPLACE(LOWER(incipit), 'æ', 'ae'), 'œ', 'oe') LIKE LOWER(:pat)
         ORDER BY LENGTH(incipit)
         LIMIT 30
     """)
@@ -745,7 +762,7 @@ def db_candidates(engine, chant_type: str, incipit_dir: str, filename: str) -> l
     expected_parts = CHANT_TYPE_OFFICE_PARTS.get(chant_type)
 
     def score(r):
-        db_dir = '-'.join((r['incipit'] or '').lower().split())
+        db_dir = fold_incipit(r['incipit'])
         s = prefix_score(incipit_dir, db_dir)
         if s > 0 and expected_parts:
             row_part = (r.get('office-part') or '').strip().lower()
