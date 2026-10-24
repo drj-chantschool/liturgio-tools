@@ -15,7 +15,9 @@ Pass 1 — build the temporal frame
     rank table from ``p_lit_rank``.
 
 Pass 2 — overlay the sanctoral calendar with transfers
-    For each saint in ``proper_of_saints`` (filtered by jurisdiction):
+    For each saint in ``proper_of_saints`` (filtered by jurisdiction), and each
+    movable memorial in ``movable_observance`` (already dated, so step a. is
+    skipped for it):
 
     a. Compute the saint's actual civil date in the target year from
        ``month_nominal`` / ``day_nominal``.
@@ -187,6 +189,36 @@ def _load_saints(conn, jurisdiction: str) -> list[dict]:
     ]
 
 
+def _load_movable(conn, jurisdiction: str, civil_year: int) -> list[dict]:
+    """
+    Load the movable observances dated in civil_year from movable_observance
+    (memorials keyed to Easter/Pentecost, e.g. the Immaculate Heart), shaped like
+    _load_saints rows plus their computed ``dt``. Rank is lit_epoch.rank_code.
+    """
+    rows = conn.execute(text("""
+        SELECT mo.slug, le.title, le.rank_code,
+               plr.sort_order, plr.can_be_transferred, mo.dt
+        FROM movable_observance mo
+        JOIN lit_epoch le   ON le.slug = mo.slug
+        JOIN p_lit_rank plr ON plr.rank_code = le.rank_code
+        WHERE mo.jurisdiction = :jur
+          AND YEAR(mo.dt)     = :yr
+        ORDER BY mo.dt, mo.slug
+    """), {'jur': jurisdiction, 'yr': civil_year}).fetchall()
+
+    return [
+        {
+            'slug':               r[0],
+            'common_name':        r[1],
+            'rank_code':          r[2],
+            'sort_order':         r[3],
+            'can_be_transferred': bool(r[4]),
+            'dt':                 r[5],
+        }
+        for r in rows
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Core resolution logic
 # ---------------------------------------------------------------------------
@@ -286,7 +318,7 @@ def resolve_year(
     with engine.connect() as conn:
         ranks   = _load_ranks(conn)
         temporal = _load_temporal(conn, jurisdiction, civil_year)
-        saints   = _load_saints(conn, jurisdiction)
+        saints   = _load_saints(conn, jurisdiction) + _load_movable(conn, jurisdiction, civil_year)
 
     # Rank metadata for the PROPER_SOLEMNITY elevation
     proper_sol_rank = ranks['PROPER_SOLEMNITY']
@@ -311,7 +343,8 @@ def resolve_year(
     # frame for this year.
     saint_by_nominal: dict[datetime.date, list[dict]] = {}
     for s in effective_saints:
-        dt = _saint_nominal_date(s, civil_year)
+        # Movable observances arrive already dated.
+        dt = s['dt'] if 'dt' in s else _saint_nominal_date(s, civil_year)
         if dt is None:
             continue  # Feb 29 in non-leap year, skip
         if dt not in temporal:

@@ -88,7 +88,8 @@
 --     formula's PASC-OCT-02-1.  It keeps that slug's sort_order (106) and the
 --     PASC-OCT-02 week node does not exist.  Week/subseason sort_order is
 --     derived BEFORE this reslug, which is why PASC-AD_ASC-02 is 107 and not 106.
--- R3  OT-FOL-00-5 (Immaculate Heart) is a MEMORIAL; no broad rule covers it.
+-- R3  OT-FOL-00-5 (Immaculate Heart) and OT-FOL-00-6 (BVM, Mother of the
+--     Church) are MEMORIALs; no broad rule covers them.
 --
 -- ------------------------------------------------------------
 -- Sources: p_liturgical_subseasons, p_liturgical_day_slug_overrides,
@@ -199,7 +200,7 @@ CREATE TEMPORARY TABLE tmp_titles (
 -- seq) IS the sort_order contract: it is stable as long as no subseason's
 -- minwk/maxwk/minseq/maxseq changes, and a maxseq bump only shifts days that
 -- sort AFTER the bumped subseason (OT/FOL is last, which is why maxseq 4->5
--- added OT-FOL-00-5 at 394 and moved nothing).
+-- added OT-FOL-00-5 at 394, and 5->6 OT-FOL-00-6 at 395, moving nothing).
 --
 -- The five exclusion predicates are unchanged and are applied BEFORE ranking.
 -- R1/R2 are applied AFTER ranking, in STEP 3, precisely so they do not shift
@@ -506,6 +507,11 @@ WHERE kind='day' AND season='OT' AND subseason='FOL' AND wknum=0 AND seq=4;
 -- rehomed into the temporale 2026-09-16; no broad rule reaches it.
 UPDATE tmp_epoch_gen SET rank_code = 'MEMORIAL'
 WHERE kind='day' AND season='OT' AND subseason='FOL' AND wknum=0 AND seq=5;
+
+-- R3: Blessed Virgin Mary, Mother of the Church (OT-FOL-00-6) -> MEMORIAL.
+-- Monday after Pentecost (decree Ecclesia Mater, 2018).
+UPDATE tmp_epoch_gen SET rank_code = 'MEMORIAL'
+WHERE kind='day' AND season='OT' AND subseason='FOL' AND wknum=0 AND seq=6;
 
 -- Solemnity of Mary, Mother of God (NAT-OCT-02-0) -> SOLEMNITY
 UPDATE tmp_epoch_gen SET rank_code = 'SOLEMNITY'

@@ -293,7 +293,8 @@ on
     and ld.wknum = week(ps.dt) - week(de.dt) + 1
     and ld.seq = ps.wkday
     and ld.subseason = case
-        when ld.wknum=1 or (ld.wknum=2 and ld.seq=1)
+        -- Divine Mercy Sunday is PASC-AD_ASC-02-1 since the Easter Sunday reslug
+        when ld.wknum=1
             then 'OCT'
         when ld.wknum=8
             then 'PENT'
@@ -659,6 +660,87 @@ WHERE u.jurisdiction = 'UNIVERSAL'
   AND ld_u.subseason = 'FOL'
   AND ld_u.wknum = 0
   AND ld_u.seq = 2;
+
+-- Corpus Christi - US: the vacated Thursday is that week's Ordinary Time feria
+-- (the Thursday of the same week as the UNIVERSAL Wednesday before it).
+INSERT IGNORE INTO proper_of_seasons (dt, jurisdiction, liturgical_year, lit_day_id)
+SELECT
+    u.dt,
+    'US' AS jurisdiction,
+    u.liturgical_year,
+    ld_thu.slug
+FROM proper_of_seasons u
+JOIN lit_epoch ld_u
+  ON ld_u.slug = u.lit_day_id
+  AND ld_u.kind = 'day'
+JOIN proper_of_seasons wed
+  ON wed.jurisdiction = 'UNIVERSAL'
+  AND wed.dt = u.dt - INTERVAL 1 DAY
+JOIN lit_epoch ld_wed
+  ON ld_wed.slug = wed.lit_day_id
+  AND ld_wed.kind = 'day'
+JOIN lit_epoch ld_thu
+  ON ld_thu.kind = 'day'
+  AND ld_thu.season = ld_wed.season
+  AND ld_thu.subseason = ld_wed.subseason
+  AND ld_thu.wknum = ld_wed.wknum
+  AND ld_thu.seq = 5
+WHERE u.jurisdiction = 'UNIVERSAL'
+  AND ld_u.season = 'OT'
+  AND ld_u.subseason = 'FOL'
+  AND ld_u.wknum = 0
+  AND ld_u.seq = 2;
+
+
+-- ============================================================
+-- MOVABLE MEMORIALS -> movable_observance
+-- A movable observance that does not own its whole day (a memorial) can't
+-- take the day's proper_of_seasons row: the weekday keeps it, for the psalter
+-- week, the weekday readings and the parts the memorial lacks. These go in
+-- their own dated table instead, and compete for precedence like a fixed-date
+-- saint (get_day and resolver.py read it alongside proper_of_saints). Rank is
+-- lit_epoch.rank_code. Generated rows only: safe to rebuild.
+-- ============================================================
+drop table if exists movable_observance;
+
+CREATE TABLE movable_observance (
+    jurisdiction    VARCHAR(64)       NOT NULL,
+    dt              DATE              NOT NULL,
+    slug            VARCHAR(64)       NOT NULL,
+    liturgical_year SMALLINT UNSIGNED NOT NULL,
+
+    PRIMARY KEY (jurisdiction, dt, slug),
+    INDEX idx_mo_slug (slug),
+
+    CONSTRAINT fk_mo_jurisdiction
+        FOREIGN KEY (jurisdiction)
+        REFERENCES p_jurisdiction(jurisdiction_code)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    CONSTRAINT fk_mo_lit_epoch
+        FOREIGN KEY (slug)
+        REFERENCES lit_epoch(slug)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+);
+
+-- Immaculate Heart of the BVM (OT-FOL-00-5): Saturday after the Sacred Heart,
+-- 20 days after Pentecost.
+-- Blessed Virgin Mary, Mother of the Church (OT-FOL-00-6): Monday after Pentecost.
+INSERT INTO movable_observance (jurisdiction, dt, slug, liturgical_year)
+SELECT pent.jurisdiction, pent.dt + INTERVAL x.days DAY, ld.slug, pent.liturgical_year
+FROM proper_of_seasons pent
+JOIN lit_epoch ld_pent
+  ON ld_pent.slug = pent.lit_day_id
+  AND ld_pent.kind = 'day'
+  AND ld_pent.subseason = 'PENT'
+JOIN (SELECT 5 AS seq, 20 AS days UNION ALL SELECT 6, 1) x
+JOIN lit_epoch ld
+  ON ld.kind = 'day'
+  AND ld.season = 'OT'
+  AND ld.subseason = 'FOL'
+  AND ld.wknum = 0
+  AND ld.seq = x.seq;
 
 
 
