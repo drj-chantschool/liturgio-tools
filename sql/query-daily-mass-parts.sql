@@ -39,8 +39,8 @@
 --   overlaid sanctoral observance.
 --
 -- Step 8 (2026-06-26): queries lit_part_sources directly (lit_part_assignment
---   dropped). chant_group_id is derived by joining through lps.chant_uuid to
---   gregobase_chant_group_map or local_chants.
+--   dropped). chant_group_id is lps.chant_group_id (a group-level link) or
+--   the chant's, joined through lps.chant_uuid to chants (2026-10-23).
 
 WITH RECURSIVE ctx AS (
     -- Resolve the liturgical day for this date, preferring the requested jurisdiction.
@@ -99,9 +99,8 @@ candidates AS (
         lps.notes,
         lps.chant_uuid,
 
-        -- Derive chant_group_id by joining through chant_uuid.
-        -- gregobase: prefix → gregobase_chant_group_map; local: → local_chants.
-        COALESCE(gcm.chant_group_id, lc.chant_group_id) AS chant_group_id,
+        -- Group-level link, else the assigned chant's group.
+        COALESCE(lps.chant_group_id, ch.chant_group_id) AS chant_group_id,
 
         -- Is this an epoch match (1) or a psalter fallback (0)?
         -- Epoch matches always beat fallback.
@@ -137,13 +136,8 @@ candidates AS (
     LEFT JOIN ancestors anc
       ON anc.slug = lps.lit_epoch_slug   -- NULL for psalter rows
 
-    -- Resolve chant_group_id from chant_uuid (two prefix types)
-    LEFT JOIN gregobase_chant_group_map gcm
-           ON lps.chant_uuid LIKE 'gregobase:%'
-          AND gcm.gregobase_id = CAST(SUBSTRING(lps.chant_uuid, 11) AS UNSIGNED)
-    LEFT JOIN local_chants lc
-           ON lps.chant_uuid LIKE 'local:%'
-          AND lc.local_chant_id = SUBSTRING(lps.chant_uuid, 7)
+    -- Resolve chant_group_id from chant_uuid
+    LEFT JOIN chants ch ON ch.chant_uuid = lps.chant_uuid
 
     -- Only include this row if it is an epoch match OR a psalter fallback
     WHERE (

@@ -5,7 +5,7 @@ upload_english_chants.py
 Walks chant directories (Introitus/, Offertorium/, Communio/, Alleluia/, etc.) for english*.gabc files,
 resolves the corresponding chant_group_id via the sibling Latin file (or the
 directory name when no Latin sibling exists), checks for duplicates, and
-inserts new rows into local_chants.
+inserts new local chants (chants rows 'local:<uuid>').
 
 Interactive when needed:
   - Ambiguous chant group: shows ~30 neumes of each candidate alongside
@@ -26,6 +26,7 @@ import getpass
 import logging
 from pathlib import Path
 
+from gabc_tools.elements import elements_gabc_body, load_elements, to_elements
 from gabc_tools.gbchant import extract_gabc_body, parse_gabc_header
 
 log = logging.getLogger(__name__)
@@ -279,11 +280,11 @@ def lookup_exact(engine, incipit: str, part_code: str, mode: str | None) -> list
 
     def _query(use_mode: bool) -> list[tuple]:
         sql    = """
-            SELECT gcm.chant_group_id, gc.mode
-              FROM gregobase_chants gc
-              JOIN gregobase_chant_group_map gcm ON gc.id = gcm.gregobase_id
-             WHERE LOWER(gc.incipit) = LOWER(:inc)
-               AND gc.`office-part` = :part
+            SELECT gc.chant_group_id, gc.mode
+              FROM chants gc
+             WHERE gc.origin_source = 'GREGOBASE'
+               AND LOWER(gc.incipit) = LOWER(:inc)
+               AND gc.office_part = :part
         """
         params: dict = {'inc': incipit, 'part': part_code}
         if use_mode and mode:
@@ -312,11 +313,11 @@ def lookup_prefix(engine, incipit: str, part_code: str) -> list[int]:
     with engine.connect() as conn:
         for pat in patterns:
             result = conn.execute(sqlt("""
-                SELECT gcm.chant_group_id, gc.mode
-                  FROM gregobase_chants gc
-                  JOIN gregobase_chant_group_map gcm ON gc.id = gcm.gregobase_id
-                 WHERE LOWER(gc.incipit) LIKE LOWER(:pat)
-                   AND gc.`office-part` = :part
+                SELECT gc.chant_group_id, gc.mode
+                  FROM chants gc
+                 WHERE gc.origin_source = 'GREGOBASE'
+                   AND LOWER(gc.incipit) LIKE LOWER(:pat)
+                   AND gc.office_part = :part
             """), {'pat': pat, 'part': part_code}).fetchall()
             for row in result:
                 if row[0] not in seen:
@@ -331,25 +332,29 @@ def chant_already_exists(engine, chant_group_id: int, version: str) -> bool:
     from sqlalchemy import text as sqlt
     with engine.connect() as conn:
         count = conn.execute(sqlt("""
-            SELECT COUNT(*) FROM local_chants
-             WHERE chant_group_id = :cgid AND version = :ver
+            SELECT COUNT(*) FROM chants
+             WHERE chant_uuid LIKE 'local:%' AND chant_group_id = :cgid AND version = :ver
         """), {'cgid': chant_group_id, 'ver': version}).scalar()
     return bool(count)
+
+
+def _elements(gabc: str) -> str:
+    return json.dumps(to_elements({'gabc': gabc}), ensure_ascii=False)
 
 
 def insert_local_chant(engine, row: dict) -> None:
     from sqlalchemy import text as sqlt
     with engine.begin() as conn:
         conn.execute(sqlt("""
-            INSERT INTO local_chants
-                (local_chant_id, chant_group_id, version, incipit, office_part,
-                 mode, transcriber, commentary, gabc, translation_source_code,
+            INSERT INTO chants
+                (chant_uuid, chant_group_id, version, incipit, office_part,
+                 mode, transcriber, commentary, elements, translation_source_code,
                  is_text_exact, notes, status)
             VALUES
-                (:uid, :cgid, :version, :incipit, :part,
-                 :mode, :transcriber, :commentary, :gabc, :translation_source,
+                (CONCAT('local:', :uid), :cgid, :version, :incipit, :part,
+                 :mode, :transcriber, :commentary, :elements, :translation_source,
                  :is_text_exact, :notes, 'draft')
-        """), row)
+        """), {**row, 'elements': _elements(row['gabc'])})
 
 
 def fetch_group_candidates(engine, group_ids: list[int], part_code: str) -> list[dict]:
@@ -368,21 +373,21 @@ def fetch_group_candidates(engine, group_ids: list[int], part_code: str) -> list
             canonical = cg[0] if cg else f'(group {cgid})'
 
             gc = conn.execute(sqlt("""
-                SELECT gc.incipit, gc.mode, gc.version, gc.gabc
-                  FROM gregobase_chants gc
-                  JOIN gregobase_chant_group_map gcm ON gc.id = gcm.gregobase_id
-                 WHERE gcm.chant_group_id = :cgid
-                   AND gc.`office-part`   = :part
+                SELECT gc.incipit, gc.mode, gc.version, gc.elements
+                  FROM chants gc
+                 WHERE gc.chant_group_id = :cgid
+                   AND gc.origin_source  = 'GREGOBASE'
+                   AND gc.office_part    = :part
                  ORDER BY
                    CASE WHEN gc.version LIKE '%Solesmes%' THEN 0
                         WHEN gc.version LIKE '%Vatican%'  THEN 1
                         ELSE 2 END,
-                   gc.id
+                   CAST(gc.origin_id AS UNSIGNED)
                  LIMIT 1
             """), {'cgid': cgid, 'part': part_code}).fetchone()
 
             if gc:
-                gabc_body   = extract_gabc_body(gc[3] or '')
+                gabc_body   = elements_gabc_body(load_elements(gc[3]), first_verse=True)
                 version_str = gc[2] or ''
             else:
                 gabc_body   = ''
@@ -504,13 +509,18 @@ def fetch_existing_chant(engine, chant_group_id: int, version: str) -> dict | No
     from sqlalchemy import text as sqlt
     with engine.connect() as conn:
         row = conn.execute(sqlt("""
-            SELECT local_chant_id, gabc, incipit, office_part AS part, mode,
+            SELECT SUBSTRING(chant_uuid, 7) AS local_chant_id, elements, incipit, office_part AS part, mode,
                    transcriber, commentary, translation_source_code, is_text_exact, notes
-              FROM local_chants
-             WHERE chant_group_id = :cgid AND version = :ver
+              FROM chants
+             WHERE chant_uuid LIKE 'local:%' AND chant_group_id = :cgid AND version = :ver
              LIMIT 1
         """), {'cgid': chant_group_id, 'ver': version}).mappings().fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    row = dict(row)
+    els = load_elements(row.pop('elements'))   # a local chant is one gabc element: its file
+    row['gabc'] = els[0][1] if len(els) == 1 else elements_gabc_body(els)
+    return row
 
 
 def row_differs(existing: dict, new_row: dict) -> bool:
@@ -535,18 +545,18 @@ def update_local_chant(engine, row: dict, local_chant_id: str) -> None:
     from sqlalchemy import text as sqlt
     with engine.begin() as conn:
         conn.execute(sqlt("""
-            UPDATE local_chants
+            UPDATE chants
                SET incipit                = :incipit,
                    office_part            = :part,
                    mode                   = :mode,
                    transcriber            = :transcriber,
                    commentary             = :commentary,
-                   gabc                   = :gabc,
+                   elements               = :elements,
                    translation_source_code = :translation_source,
                    is_text_exact          = :is_text_exact,
                    notes                  = :notes
-             WHERE local_chant_id = :local_chant_id
-        """), {**row, 'local_chant_id': local_chant_id})
+             WHERE chant_uuid = CONCAT('local:', :local_chant_id)
+        """), {**row, 'elements': _elements(row['gabc']), 'local_chant_id': local_chant_id})
 
 
 def _read_gabc(eng_path: Path) -> tuple[dict, str]:
@@ -640,7 +650,7 @@ def process_file(eng_path: Path, part_code: str, engine, dry_run: bool,
     if len(group_ids) > 1:
         already = [cgid for cgid in group_ids if chant_already_exists(engine, cgid, version)]
         if len(already) > 1:
-            return f'SKIPPED    (multiple chant_groups already in local_chants: {already})'
+            return f'SKIPPED    (multiple chant_groups already have a local chant: {already})'
         if len(already) == 1:
             chant_group_id = already[0]   # unambiguous via existing row; fall through to update check
         else:

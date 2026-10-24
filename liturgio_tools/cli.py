@@ -21,7 +21,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from gabc_tools.gbchant import extract_gabc_body
+from gabc_tools.elements import elements_gabc_body, load_elements, to_elements
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ def build_gabc_file(row: dict) -> str:
         if row.get('transcriber'):
             lines.append(f"transcriber:{row['transcriber']};")
         headers = '\n'.join(lines)
-    body = extract_gabc_body(row.get('gabc') or '')
+    body = elements_gabc_body(load_elements(row.get('elements')), first_verse=True)
     return f'{headers}\n%%\n{body}'
 
 
@@ -176,10 +176,11 @@ def cmd_lookup_day(args):
                 # Show GR page numbers if available
                 gr_pages = conn.execute(text("""
                     SELECT gcs.source, gcs.page, gs.title, gs.year
-                    FROM gregobase_chant_group_map gcgm
-                    JOIN gregobase_chant_sources gcs ON gcs.chant_id = gcgm.gregobase_id
+                    FROM chants ch
+                    JOIN gregobase_chant_sources gcs
+                      ON ch.origin_source = 'GREGOBASE' AND gcs.chant_id = CAST(ch.origin_id AS UNSIGNED)
                     JOIN gregobase_sources gs ON gs.id = gcs.source
-                    WHERE gcgm.chant_group_id = :gid
+                    WHERE ch.chant_group_id = :gid
                       AND gcs.source IN (1, 2, 4)
                     ORDER BY gcs.source, gcs.sequence
                 """), {'gid': a[2]}).fetchall()
@@ -242,19 +243,19 @@ def cmd_search_chant(args):
 
     with engine.connect() as conn:
         rows = conn.execute(text("""
-            SELECT gc.id, gc.incipit, gc.mode, gc.`office-part`, gc.gabc,
+            SELECT CAST(gc.origin_id AS UNSIGNED) AS id, gc.incipit, gc.mode, gc.office_part, gc.elements,
                    GROUP_CONCAT(
                        CONCAT(gs.year, ' ', gs.title, ' p.', gcs.page)
                        ORDER BY gcs.source, gcs.sequence
                        SEPARATOR ' | '
                    ) AS gr_pages,
-                   gcgm.chant_group_id
-            FROM gregobase_chants gc
-            LEFT JOIN gregobase_chant_group_map gcgm ON gcgm.gregobase_id = gc.id
-            LEFT JOIN gregobase_chant_sources gcs ON gcs.chant_id = gc.id AND gcs.source IN (1, 2, 4)
+                   gc.chant_group_id
+            FROM chants gc
+            LEFT JOIN gregobase_chant_sources gcs
+                   ON gcs.chant_id = CAST(gc.origin_id AS UNSIGNED) AND gcs.source IN (1, 2, 4)
             LEFT JOIN gregobase_sources gs ON gs.id = gcs.source
-            WHERE gc.incipit LIKE :incipit
-            GROUP BY gc.id, gc.incipit, gc.mode, gc.`office-part`, gc.gabc, gcgm.chant_group_id
+            WHERE gc.origin_source = 'GREGOBASE' AND gc.incipit LIKE :incipit
+            GROUP BY gc.chant_uuid
             ORDER BY gc.incipit
             LIMIT 20
         """), {'incipit': f'%{args.incipit}%'}).fetchall()
@@ -266,8 +267,8 @@ def cmd_search_chant(args):
         print(f'Found {len(rows)} chant(s) matching "{args.incipit}":\n')
         results = []
         for row in rows:
-            gc_id, incipit, mode, office_part, gabc_raw, gr_pages, group_id = row
-            body = extract_gabc_body(gabc_raw or '')
+            gc_id, incipit, mode, office_part, elements, gr_pages, group_id = row
+            body = elements_gabc_body(load_elements(elements), first_verse=True)
             # First 80 chars of body
             preview = body[:80].replace('\n', ' ') + ('…' if len(body) > 80 else '')
 
@@ -298,24 +299,18 @@ def cmd_get_chant(args):
     engine = get_ro_engine()
 
     with engine.connect() as conn:
+        select = """
+                SELECT CAST(gc.origin_id AS UNSIGNED) AS id, gc.incipit, gc.mode, gc.office_part, gc.elements,
+                       gc.headers, gc.version, gc.transcriber, gc.commentary,
+                       gc.chant_group_id
+                FROM chants gc
+                WHERE gc.origin_source = 'GREGOBASE' AND """
         if args.gregobase_id:
-            rows = conn.execute(text("""
-                SELECT gc.id, gc.incipit, gc.mode, gc.`office-part`, gc.gabc,
-                       gc.headers, gc.version, gc.transcriber, gc.commentary,
-                       gcgm.chant_group_id
-                FROM gregobase_chants gc
-                LEFT JOIN gregobase_chant_group_map gcgm ON gcgm.gregobase_id = gc.id
-                WHERE gc.id = :id
-            """), {'id': args.gregobase_id}).fetchall()
+            rows = conn.execute(text(select + "gc.origin_id = :id"),
+                                {'id': str(args.gregobase_id)}).fetchall()
         else:
-            rows = conn.execute(text("""
-                SELECT gc.id, gc.incipit, gc.mode, gc.`office-part`, gc.gabc,
-                       gc.headers, gc.version, gc.transcriber, gc.commentary,
-                       gcgm.chant_group_id
-                FROM gregobase_chants gc
-                JOIN gregobase_chant_group_map gcgm ON gcgm.gregobase_id = gc.id
-                WHERE gcgm.chant_group_id = :gid
-            """), {'gid': args.chant_group_id}).fetchall()
+            rows = conn.execute(text(select + "gc.chant_group_id = :gid"),
+                                {'gid': args.chant_group_id}).fetchall()
 
         if not rows:
             print('No chant found.')
@@ -323,7 +318,7 @@ def cmd_get_chant(args):
 
         results = []
         for row in rows:
-            gc_id, incipit, mode, office_part, gabc_raw, headers, version, transcriber, commentary, group_id = row
+            gc_id, incipit, mode, office_part, elements, headers, version, transcriber, commentary, group_id = row
 
             gabc_full = build_gabc_file({
                 'incipit': incipit,
@@ -332,7 +327,7 @@ def cmd_get_chant(args):
                 'version': version,
                 'transcriber': transcriber,
                 'headers': headers,
-                'gabc': gabc_raw,
+                'elements': elements,
             })
 
             # GR page numbers
@@ -365,19 +360,19 @@ def cmd_get_chant(args):
                 'gabc_full': gabc_full,
             })
 
-        # Also fetch any existing local_chants (English) for the group
+        # Also fetch any existing local chants (English) for the group
         group_id = results[0]['chant_group_id'] if results else args.chant_group_id
         if group_id:
             english = conn.execute(text("""
-                SELECT local_chant_id, version, incipit, mode, translation_source_code,
-                       source_citation, is_text_exact, status, gabc, notes, created_at
-                FROM local_chants
-                WHERE chant_group_id = :gid
+                SELECT SUBSTRING(chant_uuid, 7), version, incipit, mode, translation_source_code,
+                       source_citation, is_text_exact, status, elements, notes, created_at
+                FROM chants
+                WHERE chant_group_id = :gid AND chant_uuid LIKE 'local:%'
                 ORDER BY created_at
             """), {'gid': group_id}).fetchall()
 
             if english:
-                print(f'=== Existing English (local_chants) for group {group_id} ===')
+                print(f'=== Existing English (local chants) for group {group_id} ===')
                 for e in english:
                     print(f'  [{e[0]}] version={e[1]} status={e[7]} source={e[4]} exact={e[6]}')
                     print(f'  incipit: {e[2]}')
@@ -423,21 +418,21 @@ def cmd_save_english(args):
     engine = get_rw_engine()
     with engine.connect() as conn:
         conn.execute(text("""
-            INSERT INTO local_chants
-                (local_chant_id, chant_group_id, version, incipit, office_part, mode,
-                 gabc, translation_source_code, source_citation, is_text_exact,
+            INSERT INTO chants
+                (chant_uuid, chant_group_id, version, incipit, office_part, mode,
+                 elements, translation_source_code, source_citation, is_text_exact,
                  derived_from_uid, status, notes)
             VALUES
                 (:uid, :gid, 'english', :incipit, :office_part, :mode,
-                 :gabc, :source, :citation, :is_exact,
+                 :elements, :source, :citation, :is_exact,
                  :derived_from, 'draft', :notes)
         """), {
-            'uid': local_chant_id,
+            'uid': f'local:{local_chant_id}',
             'gid': args.chant_group_id,
             'incipit': incipit,
             'office_part': office_part,
             'mode': mode,
-            'gabc': gabc_content,
+            'elements': json.dumps(to_elements({'gabc': gabc_content}), ensure_ascii=False),
             'source': args.source,
             'citation': args.source_citation,
             'is_exact': is_exact,
@@ -489,9 +484,9 @@ def cmd_merge_groups(args):
         def fetch_modes(gid):
             rows = conn.execute(text("""
                 SELECT DISTINCT gc.mode
-                FROM gregobase_chant_group_map gcgm
-                JOIN gregobase_chants gc ON gc.id = gcgm.gregobase_id
-                WHERE gcgm.chant_group_id = :gid AND gc.mode IS NOT NULL AND gc.mode != ''
+                FROM chants gc
+                WHERE gc.chant_group_id = :gid AND gc.origin_source = 'GREGOBASE'
+                  AND gc.mode IS NOT NULL AND gc.mode != ''
             """), {'gid': gid}).fetchall()
             return {r[0] for r in rows}
 
@@ -527,27 +522,12 @@ def cmd_merge_groups(args):
             ), {'gid': gid}).fetchone()
             return row[0]
 
-        n_map   = count_rows('gregobase_chant_group_map', 'chant_group_id', merge_id)
-        n_local = count_rows('local_chants',              'chant_group_id', merge_id)
-        n_lpa   = count_rows('lit_part_assignment',       'chant_group_id', merge_id)
+        remap_tables = ('chants', 'lit_part_sources', 'chant_indices')
+        counts = {t: count_rows(t, 'chant_group_id', merge_id) for t in remap_tables}
         print()
         print(f'Rows to remap:')
-        print(f'  gregobase_chant_group_map : {n_map}')
-        print(f'  local_chants              : {n_local}')
-        print(f'  lit_part_assignment       : {n_lpa}')
-
-        # Find gregobase_ids that would cause a duplicate key conflict
-        duplicates = conn.execute(text("""
-            SELECT m.gregobase_id
-            FROM gregobase_chant_group_map m
-            JOIN gregobase_chant_group_map k
-              ON k.gregobase_id = m.gregobase_id
-             AND k.chant_group_id = :keep_id
-            WHERE m.chant_group_id = :merge_id
-        """), {'keep_id': keep_id, 'merge_id': merge_id}).fetchall()
-        dup_ids = [r[0] for r in duplicates]
-        if dup_ids:
-            print(f'  ({len(dup_ids)} gregobase map row(s) are already in keep group — will be deleted)')
+        for t, n in counts.items():
+            print(f'  {t:<17}: {n}')
 
     print()
     if not args.force:
@@ -558,30 +538,12 @@ def cmd_merge_groups(args):
     # Execute merge in a single transaction
     rw_engine = get_rw_engine()
     with rw_engine.connect() as conn:
-        # gregobase_chant_group_map: delete duplicates, then remap the rest
-        if dup_ids:
-            conn.execute(text("""
-                DELETE FROM gregobase_chant_group_map
-                WHERE chant_group_id = :merge_id AND gregobase_id IN :ids
-            """), {'merge_id': merge_id, 'ids': tuple(dup_ids)})
-
-        conn.execute(text("""
-            UPDATE gregobase_chant_group_map
-            SET chant_group_id = :keep_id
-            WHERE chant_group_id = :merge_id
-        """), {'keep_id': keep_id, 'merge_id': merge_id})
-
-        # local_chants
-        conn.execute(text("""
-            UPDATE local_chants SET chant_group_id = :keep_id
-            WHERE chant_group_id = :merge_id
-        """), {'keep_id': keep_id, 'merge_id': merge_id})
-
-        # lit_part_assignment
-        conn.execute(text("""
-            UPDATE lit_part_assignment SET chant_group_id = :keep_id
-            WHERE chant_group_id = :merge_id
-        """), {'keep_id': keep_id, 'merge_id': merge_id})
+        # Every chant, and every group-level link, moves to the kept group
+        for t in remap_tables:
+            conn.execute(text(f"""
+                UPDATE {t} SET chant_group_id = :keep_id
+                WHERE chant_group_id = :merge_id
+            """), {'keep_id': keep_id, 'merge_id': merge_id})
 
         # Delete the merged group
         conn.execute(text(
@@ -596,10 +558,7 @@ def cmd_merge_groups(args):
     print(json.dumps({
         'kept': keep_id,
         'deleted': merge_id,
-        'gregobase_map_remapped': n_map - len(dup_ids),
-        'gregobase_map_deleted': len(dup_ids),
-        'local_chants_remapped': n_local,
-        'lit_part_assignment_remapped': n_lpa,
+        **{f'{t}_remapped': n for t, n in counts.items()},
     }, indent=2))
 
 
@@ -774,7 +733,7 @@ def main():
     p_get.add_argument('--gregobase-id', type=int, default=None)
 
     # save-english
-    p_save = sub.add_parser('save-english', help='Save an English GABC adaptation to local_chants')
+    p_save = sub.add_parser('save-english', help='Save an English GABC adaptation as a local chant')
     p_save.add_argument('--chant-group-id', type=int, required=True)
     p_save.add_argument('--gabc-file', required=True, help='Path to .gabc file to save')
     p_save.add_argument('--source', required=True,

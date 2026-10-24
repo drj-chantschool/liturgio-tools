@@ -15,8 +15,8 @@ ALIGNMENT_TOP_K = 50        # number of cosine neighbors to refine with NW align
 
 # === Load chants ===
 query = (
-    f"select * from gregobase_chants "
-    f"where `office-part`='{OFFICE_PART}' "
+    f"select CAST(origin_id AS UNSIGNED) AS id, incipit, mode, elements from chants "
+    f"where origin_source='GREGOBASE' and office_part='{OFFICE_PART}' "
     f"and version like '{VERSION}'"
 )
 chants = list(load_chants(query, error='warn'))

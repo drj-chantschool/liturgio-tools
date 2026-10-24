@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS `chant_indices` (
   `day_code`      VARCHAR(40) DEFAULT NULL COMMENT 'Day/feast siglum as printed in the index, e.g. OCO 1A1, 21/2, UnM',
   `hour_code`     VARCHAR(16) DEFAULT NULL COMMENT 'Hour siglum as printed, e.g. OCO 1V, L, Ol, Hm, V, 2V',
   `place_code`    VARCHAR(40) DEFAULT NULL COMMENT 'Place in the hour as printed, e.g. OCO 1, 2, 3, B, Ma, M ad lib',
-  `chant_uuid`    VARCHAR(80) DEFAULT NULL COMMENT 'v_chant_item.chant_item_uid, e.g. gregobase:123 or local:<uuid>; no FK (view)',
+  `chant_uuid`    VARCHAR(80) DEFAULT NULL COMMENT 'chants.chant_uuid, e.g. gregobase:123 or local:<uuid>',
   `match_status`  ENUM('resolved','ambiguous','unmatched','reviewed','resolved_with_difficulty') DEFAULT NULL,
   PRIMARY KEY (`row_id`),
   UNIQUE KEY `uq_ci_book_id_page` (`book`, `id`, `page`),

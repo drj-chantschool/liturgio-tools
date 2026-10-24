@@ -23,6 +23,11 @@ scraper leaves both untouched and reports chants whose verses it could not
 capture, so they can be filled from a GregoBase SQL dump instead. For those it
 also stores a reconstruction from the PDFs (tex_verses_pdf.py) in the separate
 ``tex_verses_pdf`` column, which is never a source and never touches tex_verses.
+
+``gregobase_chants`` is only a staging table: nothing reads it but the chants
+import and the propers matchers. After a scrape, run
+``python -m liturgio_tools.chants_import`` (dry run, then ``--execute``) to bring
+the changes into ``chants``.
 """
 import hashlib
 import json

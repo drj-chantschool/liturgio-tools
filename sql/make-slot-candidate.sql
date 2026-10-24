@@ -1,7 +1,6 @@
-drop table if exists gregobase_chant_group_map;
-drop table if exists lit_part_assignment;
+drop view if exists v_chant_item;
+drop table if exists chants;
 drop table if exists service_part;
-drop table if exists local_chants;
 drop table if exists chant_group;
 
 -- ============================================================
@@ -28,65 +27,54 @@ CREATE TABLE chant_group (
 
 
 -- ============================================================
--- local_chants (extended)
+-- chants: every chant score, whatever its source (2026-10-23; replaces
+-- local_chants, gregobase_chant_group_map and the v_chant_item union).
+-- GregoBase rows are imported from the gregobase_chants staging table by
+-- liturgio_tools.chants_import; local ('Dr. J') chants are written by the API.
 -- ============================================================
-CREATE TABLE local_chants (
-    local_chant_id CHAR(36) NOT NULL,              -- UUID (text form)
-    chant_group_id BIGINT UNSIGNED NOT NULL,        -- FK to chant_group
-
-    -- Your "version name" (default 'english', but allow 'english_alt', etc.)
-    version VARCHAR(40) NOT NULL DEFAULT 'english',
-
-    -- Gregobase-like metadata (for parity / filtering)
-    incipit     VARCHAR(256) NULL,
-    `office-part` VARCHAR(16) NULL,                 -- keep same naming as gregobase for compatibility
-    mode        VARCHAR(8) NULL,
-    mode_var    VARCHAR(16) NULL,
-    transcriber VARCHAR(128) NOT NULL DEFAULT 'Doctor J',
-    commentary  VARCHAR(256) NULL,
-
-    -- The chant encoding you store (gabc for now)
-    notation VARCHAR(10) NOT NULL DEFAULT 'gabc',
-    gabc     LONGTEXT NOT NULL,
-
-    -- Provenance of the translation text used
-    translation_source_code VARCHAR(40) NULL,
-
-    -- 1 = verbatim as it appears in the source; 0 = adapted/modified
-    is_text_exact TINYINT UNSIGNED NOT NULL DEFAULT 1,
-
-    -- Optional: link back to what you started from (gregobase:123 / local:<uuid>)
-    derived_from_uid VARCHAR(80) NULL,
-
-    -- Optional: workflow/status (draft/reviewed/published)
-    status VARCHAR(20) NOT NULL DEFAULT 'draft',
-
-    notes VARCHAR(500) NULL,
-
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-
-    PRIMARY KEY (local_chant_id),
-
-    KEY idx_local_chants_group (chant_group_id),
-    KEY idx_local_chants_version (version),
-    KEY idx_local_chants_office_part (`office-part`),
-    KEY idx_local_chants_mode (mode),
-    KEY idx_local_chants_status (status),
-    KEY idx_local_chants_translation_source (translation_source_code),
-
-    CONSTRAINT fk_local_chants_group
-        FOREIGN KEY (chant_group_id)
-        REFERENCES chant_group(chant_group_id)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT,
-
-    CONSTRAINT fk_local_chants_translation_source
-        FOREIGN KEY (translation_source_code)
-        REFERENCES translation_source(translation_source_code)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
-);
+CREATE TABLE chants (
+  `chant_uuid` varchar(80) NOT NULL COMMENT 'gregobase:<id> | local:<uuid>; referenced by lit_part_sources, chant_indices, derived_from_uid',
+  `chant_group_id` bigint unsigned NOT NULL,
+  `version` varchar(128) DEFAULT 'english',
+  `incipit` varchar(256) DEFAULT NULL,
+  `office_part` varchar(16) DEFAULT NULL,
+  `mode` varchar(8) DEFAULT NULL,
+  `mode_var` varchar(16) DEFAULT NULL,
+  `transcriber` varchar(128) DEFAULT 'Doctor J',
+  `commentary` varchar(256) DEFAULT NULL,
+  `notation` varchar(10) NOT NULL DEFAULT 'gabc',
+  `elements` json NOT NULL COMMENT '[[type, content, options], ...]; see gabc_tools.elements',
+  `headers` text COMMENT 'GregoBase GABC header lines (name, office-part, mode, book, transcriber)',
+  `cantusid` varchar(32) DEFAULT NULL,
+  `copyrighted` tinyint(1) DEFAULT NULL,
+  `translation_source_code` varchar(40) DEFAULT NULL,
+  `source_citation` varchar(500) DEFAULT NULL COMMENT 'Verifiable reference for translation (e.g. liturgies.net URL, book+page, psalm+verse)',
+  `is_text_exact` tinyint unsigned DEFAULT '1',
+  `derived_from_uid` varchar(80) DEFAULT NULL COMMENT 'English adaptation of this chant_uuid (not provenance)',
+  `status` varchar(20) DEFAULT 'draft',
+  `notes` varchar(500) DEFAULT NULL,
+  `origin_source` varchar(20) DEFAULT NULL COMMENT 'Upstream feed (GREGOBASE); NULL = made here',
+  `origin_id` varchar(64) DEFAULT NULL COMMENT 'Row id in the upstream feed',
+  `origin_hash` char(64) DEFAULT NULL COMMENT 'SHA-256 of the upstream row at import (chants_import.origin_hash)',
+  `origin_pending_hash` char(64) DEFAULT NULL COMMENT 'Upstream changed on a curated row: new hash awaiting review',
+  `is_curated` tinyint(1) NOT NULL DEFAULT '0' COMMENT '1 = edited here; a re-import never overwrites it',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`chant_uuid`),
+  UNIQUE KEY `uq_chants_origin` (`origin_source`, `origin_id`),
+  KEY `idx_chants_group` (`chant_group_id`),
+  KEY `idx_chants_version` (`version`),
+  KEY `idx_chants_mode` (`mode`),
+  KEY `idx_chants_status` (`status`),
+  KEY `idx_chants_translation_source` (`translation_source_code`),
+  KEY `idx_chants_office_part` (`office_part`),
+  KEY `idx_chants_incipit` (`incipit`),
+  KEY `idx_chants_derived_from` (`derived_from_uid`),
+  CONSTRAINT `fk_chants_group` FOREIGN KEY (`chant_group_id`) REFERENCES `chant_group` (`chant_group_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `fk_chants_status` FOREIGN KEY (`status`) REFERENCES `p_review_status` (`status_code`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `fk_chants_translation_source` FOREIGN KEY (`translation_source_code`) REFERENCES `p_translation_source` (`translation_source_code`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+COMMENT='Every chant score, whatever its source (GregoBase import, Dr. J transcriptions)';
 
 
 -- ============================================================
@@ -120,82 +108,18 @@ CREATE TABLE service_part (
 -- See scripts/migrate_step8_lps_absorbs_lpa.py.
 
 
-CREATE TABLE gregobase_chant_group_map (
-    gregobase_id   INT NOT NULL,
-    chant_group_id BIGINT UNSIGNED NOT NULL,
-
-    PRIMARY KEY (gregobase_id),
-    KEY idx_gbgm_group (chant_group_id),
-
-    CONSTRAINT fk_gbgm_gregobase
-        FOREIGN KEY (gregobase_id)
-        REFERENCES gregobase_chants(id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    CONSTRAINT fk_gbgm_group
-        FOREIGN KEY (chant_group_id)
-        REFERENCES chant_group(chant_group_id)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
-);
-
-
-
 -- --------------------------------------
--- v_chant_item  - unifies local_chants and gregobase_chants
+-- v_chant_item: compatibility view over chants (same columns as the old
+-- gregobase_chants + local_chants union; `gabc` is the element list as JSON).
+-- Drop it once nothing reads it.
 -- --------------------------------------
-
 CREATE OR REPLACE VIEW v_chant_item AS
-SELECT
-    CONCAT('gregobase:', CAST(g.id AS CHAR)) AS chant_item_uid,
-    'gregobase' AS source_code,
-    CAST(g.id AS CHAR) AS source_pk,
-    m.chant_group_id,
-    g.version,
-    'gabc' AS notation,
-    g.incipit,
-    g.mode,
-    g.mode_var,
-    g.`office-part` AS office_part,
-    g.gabc,
-    NULL AS translation_source_code,
-    NULL AS is_text_exact,
-    NULL AS derived_from_uid,
-    NULL AS status,
-    NULL AS created_at,
-    NULL AS updated_at,
-    g.cantusid,
-    g.transcriber,
-    g.commentary,
-    g.copyrighted,
-    g.duplicateof
-FROM gregobase_chants g
-JOIN gregobase_chant_group_map m
-  ON m.gregobase_id = g.id
-UNION ALL
-SELECT
-    CONCAT('local:', l.local_chant_id) AS chant_item_uid,
-    'local' AS source_code,
-    l.local_chant_id AS source_pk,
-    l.chant_group_id,
-    l.version,
-    l.notation,
-    l.incipit,
-    l.mode,
-    l.mode_var,
-    l.`office-part` AS office_part,
-    l.gabc,
-    l.translation_source_code,
-    l.is_text_exact,
-    l.derived_from_uid,
-    l.status,
-    l.created_at,
-    l.updated_at,
-    NULL AS cantusid,
-    l.transcriber,
-    l.commentary,
-    NULL AS copyrighted,
-    NULL AS duplicateof
-FROM local_chants l;
-
+SELECT c.chant_uuid AS chant_item_uid,
+       IF(c.chant_uuid LIKE 'gregobase:%', 'gregobase', 'local') AS source_code,
+       SUBSTRING_INDEX(c.chant_uuid, ':', -1) AS source_pk,
+       c.chant_group_id, c.version, c.notation, c.incipit, c.mode, c.mode_var, c.office_part,
+       CAST(c.elements AS CHAR) AS gabc,
+       c.translation_source_code, c.is_text_exact, c.derived_from_uid, c.status,
+       c.created_at, c.updated_at, c.cantusid, c.transcriber, c.commentary, c.copyrighted,
+       NULL AS duplicateof
+FROM chants c;

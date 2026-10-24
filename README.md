@@ -13,14 +13,17 @@ proper texts.
     adaptations, and part assignments (`lookup-day`, `search-chant`,
     `get-chant`, `save-english`, `merge-groups`, `assign`)
   - `fix_missing_scores.py` — recover/regenerate `.gabc` files for chants
-    missing scores in `gregobase_chants`
+    missing scores, from the GregoBase rows of `chants`
   - `upload_english_chants.py` — bulk-load English GABC adaptations into
-    `local_chants`
-  - `gregobase.py` — `load_chants(query)`: query `gregobase_chants` and
+    `chants` (as `local:<uuid>` rows)
+  - `chants_import.py` — import the `gregobase_chants` staging table into
+    `chants` (dry run by default; run after every GregoBase scrape, before any
+    propers load). Re-imports changed uncurated rows; flags curated ones
+  - `gregobase.py` — `load_chants(query)`: query `chants` and
     yield [`gabc-tools`](https://github.com/drj-chantschool/gabc-tools)
     `GBChant` objects
-  - `gregobase_sync/` — sync GregoBase data into `gregobase_chants` /
-    `sync_state`
+  - `gregobase_sync/` — sync GregoBase data into the `gregobase_chants`
+    staging table / `sync_state` (then run `chants_import.py`)
   - `translations/` — scrape ICEL Mass-proper translations from
     liturgies.net and load them into `lit_part_sources` (see
     `translations/HANDOFF.md`)
@@ -72,8 +75,9 @@ Run the SQL files in `sql/` in this order:
 8. `make-proper-of-seasons.sql` — creates and populates `proper_of_seasons`
    by joining `lit_epoch` (kind='day') and `dates_for_easter`.
 9. `make-lit-observance-resolved.sql` — creates the resolved observance view.
-10. `make-slot-candidate.sql` — creates chant and assignment tables plus the
-    `v_chant_item` view.
+10. `make-slot-candidate.sql` — creates `chant_group`, `chants`,
+    `service_part` and the `v_chant_item` compatibility view. Then fill
+    `chants` with `python -m liturgio_tools.chants_import --execute`.
 11. `query-daily-mass-parts.sql` — run this after setup to query the parts
     for a given day's Mass or Office.
 
@@ -89,9 +93,8 @@ Prerequisites not created in this repo:
   `make-lit-epoch.sql`.
 - `dates_for_easter` must already exist before running
   `insert_dates_for_easter.sql`; that file only inserts rows.
-- `gregobase_chants` must already exist before running
-  `make-slot-candidate.sql`, because that script creates a foreign key to
-  it and uses it in `v_chant_item`.
+- `gregobase_chants` (the GregoBase staging table) must already exist
+  before running `liturgio_tools.chants_import`.
 
 ## CLI usage
 

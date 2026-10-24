@@ -9,7 +9,7 @@ Reads a target .tex file, finds missing chant files (both direct
   1. Disk fuzzy-match: look for a directory/filename that is a prefix match
      for the imported incipit-dir and/or filename.
 
-  2. DB pull: query gregobase_chants in the local liturgio MySQL database,
+  2. DB pull: query the GregoBase chants in the local liturgio MySQL database (chants),
      write the .gabc file to the expected location.
 
 When a match is uncertain (imperfect score or multiple candidates) the script
@@ -28,6 +28,7 @@ import logging
 import unicodedata
 from pathlib import Path
 
+from gabc_tools.elements import elements_gabc_body, load_elements
 from gabc_tools.gbchant import extract_gabc_body
 
 log = logging.getLogger(__name__)
@@ -743,9 +744,11 @@ def db_candidates(engine, chant_type: str, incipit_dir: str, filename: str) -> l
     first  = words[0] if words else ''
 
     query = text("""
-        SELECT id, incipit, headers, gabc, `office-part`, mode, version, transcriber
-        FROM gregobase_chants
-        WHERE REPLACE(REPLACE(LOWER(incipit), 'æ', 'ae'), 'œ', 'oe') LIKE LOWER(:pat)
+        SELECT CAST(origin_id AS UNSIGNED) AS id, incipit, headers, elements,
+               office_part AS `office-part`, mode, version, transcriber
+        FROM chants
+        WHERE origin_source = 'GREGOBASE'
+          AND REPLACE(REPLACE(LOWER(incipit), 'æ', 'ae'), 'œ', 'oe') LIKE LOWER(:pat)
         ORDER BY LENGTH(incipit)
         LIMIT 30
     """)
@@ -757,6 +760,9 @@ def db_candidates(engine, chant_type: str, incipit_dir: str, filename: str) -> l
             for r in conn.execute(query, {'pat': pat}).mappings():
                 if r['id'] not in seen_ids:
                     seen_ids.add(r['id'])
+                    r = dict(r)
+                    # first verse only, as a .gabc file has always been written here
+                    r['gabc'] = elements_gabc_body(load_elements(r.pop('elements')), first_verse=True)
                     rows.append(r)
 
     expected_parts = CHANT_TYPE_OFFICE_PARTS.get(chant_type)
