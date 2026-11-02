@@ -53,7 +53,7 @@ CREATE TABLE chants (
   `derived_from_uid` varchar(80) DEFAULT NULL COMMENT 'English adaptation of this chant_uuid (not provenance)',
   `status` varchar(20) DEFAULT 'draft',
   `notes` varchar(500) DEFAULT NULL,
-  `origin_source` varchar(20) DEFAULT NULL COMMENT 'Upstream feed (GREGOBASE); NULL = made here',
+  `origin_source` varchar(20) NOT NULL DEFAULT 'LOCAL' COMMENT 'GREGOBASE = imported by chants_import; LOCAL = made here (chant_uuid local:<uuid>)',
   `origin_id` varchar(64) DEFAULT NULL COMMENT 'Row id in the upstream feed',
   `origin_hash` char(64) DEFAULT NULL COMMENT 'SHA-256 of the upstream row at import (chants_import.origin_hash)',
   `origin_pending_hash` char(64) DEFAULT NULL COMMENT 'Upstream changed on a curated row: new hash awaiting review',
@@ -70,6 +70,7 @@ CREATE TABLE chants (
   KEY `idx_chants_office_part` (`office_part`),
   KEY `idx_chants_incipit` (`incipit`),
   KEY `idx_chants_derived_from` (`derived_from_uid`),
+  CONSTRAINT `chk_chants_origin` CHECK (((`origin_source` = 'GREGOBASE') and (`origin_id` is not null) and (`chant_uuid` = concat('gregobase:',`origin_id`))) or ((`origin_source` = 'LOCAL') and (`chant_uuid` like 'local:%') and (`origin_id` is null))),
   CONSTRAINT `fk_chants_group` FOREIGN KEY (`chant_group_id`) REFERENCES `chant_group` (`chant_group_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT `fk_chants_status` FOREIGN KEY (`status`) REFERENCES `p_review_status` (`status_code`) ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT `fk_chants_translation_source` FOREIGN KEY (`translation_source_code`) REFERENCES `p_translation_source` (`translation_source_code`) ON DELETE RESTRICT ON UPDATE CASCADE
