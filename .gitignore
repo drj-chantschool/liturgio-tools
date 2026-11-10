@@ -13,3 +13,4 @@ liturgio_tools/translations/raw/
 
 # One-off SQL backup dumps
 sql/archive/*_dump_*.sql
+!liturgio_tools/gregobase_sync/889.html
