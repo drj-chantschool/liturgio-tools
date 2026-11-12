@@ -27,14 +27,15 @@ INSERT INTO liturgio.p_liturgical_day_slug_overrides (slug_ovr,title_ovr,lit_day
      (NULL,NULL,'ADV-I-03-5'),
      (NULL,NULL,'ADV-I-03-6');
 INSERT INTO liturgio.p_liturgical_day_slug_overrides (slug_ovr,title_ovr,lit_day_id) VALUES
-     ('O-SAPIENTIA','O, Holy Wisdom','ADV-II-00-1'),
-     ('O-ADONAI','O, Lord','ADV-II-00-2'),
-     ('O-RADIX-JESSE','O, Root of Jesse','ADV-II-00-3'),
-     ('O-CLAVIS-DAVID','O, Key of David','ADV-II-00-4'),
-     ('O-ORIENS','O, Rising Sun','ADV-II-00-5'),
-     ('O-REX-GENTIUM','O, King of the Nations','ADV-II-00-6'),
-     ('O-EMMANUEL','O, Emmanuel','ADV-II-00-7'),
-     ('DEC24','December 24','ADV-II-00-8'),
+     -- Dec 17-24 are weekday days since 2026-11-11; the dated titles (O, Holy
+     -- Wisdom ...) now belong to the kind='date' epochs O-SAPIENTIA .. DEC-24.
+     (NULL,'4th Sunday of Advent','ADV-II-01-1'),
+     (NULL,'Monday in Late Advent','ADV-II-01-2'),
+     (NULL,'Tuesday in Late Advent','ADV-II-01-3'),
+     (NULL,'Wednesday in Late Advent','ADV-II-01-4'),
+     (NULL,'Thursday in Late Advent','ADV-II-01-5'),
+     (NULL,'Friday in Late Advent','ADV-II-01-6'),
+     (NULL,'Saturday in Late Advent','ADV-II-01-7'),
      ('NATIVITY','Christmas Day','NAT-DAY-00-0'),
      ('HOLYFAMILY','Holy Family of Jesus, Mary, and Joseph','NAT-IO-01-0');
 INSERT INTO liturgio.p_liturgical_day_slug_overrides (slug_ovr,title_ovr,lit_day_id) VALUES

@@ -38,7 +38,7 @@ INSERT INTO `p_liturgical_subseasons`
   (`season`, `subseason`, `subseason_order`, `season_rnk`, `minwk`, `maxwk`, `minseq`, `maxseq`)
 VALUES
   ('ADV',  'I',         1, 1, 1,  3,  1, 7),
-  ('ADV',  'II',        2, 1, 0,  0,  1, 8),
+  ('ADV',  'II',        2, 1, 1,  1,  1, 7),   -- weekday days; Dec 17-24 dated parts are kind='date' epochs (2026-11-11)
   ('NAT',  'DAY',       1, 2, 0,  0,  0, 0),
   ('NAT',  'IO',        2, 2, 1,  1,  0, 6),
   ('NAT',  'OCT',       3, 2, 2,  2,  0, 0),

@@ -176,19 +176,27 @@ JOIN lit_epoch ld_tgt
  AND ld_tgt.seq        = tgt.wkday
 SET tgt.lit_day_id = ld_tgt.slug
 WHERE tgt.dt BETWEEN adv_start.dt
-                AND STR_TO_DATE(CONCAT(YEAR(adv_start.dt), '-12-16'), '%Y-%m-%d');
+                AND STR_TO_DATE(CONCAT(YEAR(adv_start.dt), '-12-16'), '%Y-%m-%d')
+   -- a Dec 17 Sunday is the 3rd Sunday of Advent, not an O Antiphons day
+   OR (tgt.dt = STR_TO_DATE(CONCAT(YEAR(adv_start.dt), '-12-17'), '%Y-%m-%d')
+       AND tgt.wkday = 1);
 
--- Dec 17-24 "O Antiphons" stretch
+-- Dec 17-24 "O Antiphons" stretch: weekday days (2026-11-11).  ADV-II-01-1 is
+-- the 4th Sunday of Advent (always Dec 18-24), ADV-II-01-2..7 the ferias; Dec 17
+-- and Dec 24 share a day when neither is a Sunday.  The date-tied parts are on
+-- the kind='date' epochs O-SAPIENTIA .. DEC-24 (proper_of_saints month/day rows),
+-- which get_day layers onto whichever day this assigns.
 UPDATE proper_of_seasons tgt
 JOIN lit_epoch ld_tgt
   ON ld_tgt.kind = 'day'
  AND ld_tgt.season     = 'ADV'
  AND ld_tgt.subseason  = 'II'
- AND ld_tgt.wknum      = 0
- AND ld_tgt.seq        = datediff( tgt.dt, date(concat(year(dt),'-12-16') ) )
+ AND ld_tgt.wknum      = 1
+ AND ld_tgt.seq        = tgt.wkday
  SET tgt.lit_day_id = ld_tgt.slug
 WHERE tgt.dt BETWEEN STR_TO_DATE(CONCAT(YEAR(tgt.dt), '-12-17'), '%Y-%m-%d')
-                AND STR_TO_DATE(CONCAT(YEAR(tgt.dt), '-12-24'), '%Y-%m-%d');
+                AND STR_TO_DATE(CONCAT(YEAR(tgt.dt), '-12-24'), '%Y-%m-%d')
+  AND NOT (DAY(tgt.dt) = 17 AND tgt.wkday = 1);
 
 
 

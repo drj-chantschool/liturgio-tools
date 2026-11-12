@@ -42,6 +42,8 @@
 --
 --   NOT OWNED — never inserted, updated or deleted:
 --       * kind IN ('ritual','common','calendar') nodes  (50 + 26 + 2)
+--       * kind='date' nodes (O-SAPIENTIA .. DEC-24): dated overlays with
+--         proper_of_saints month/day rows; STEP 7 skips them
 --       * kind='mass' nodes other than the four Christmas ones (10: Epiphany /
 --         Easter / Ascension / Pentecost vigils, the two Holy Thursday Masses,
 --         and three saint vigils)
@@ -66,15 +68,17 @@
 -- ------------------------------------------------------------
 -- CONTAINER LAYER (new 2026-09-26)
 -- ------------------------------------------------------------
--- Six subseasons have wknum=0 days.  Those days used to attach straight to the
+-- Five subseasons have wknum=0 days.  Those days used to attach straight to the
 -- subseason (old Edge B).  They now go through a kind='week' container node:
 --
 --     subseason -> <SEASON>-<SUBSEASON>-00 -> each wknum=0 day
 --
---   ADV-II-00, NAT-DAY-00, NAT-EPI-00, OT-FOL-00, TQ-HOLYWEEK-00, TQ-LENT-00
+--   NAT-DAY-00, NAT-EPI-00, OT-FOL-00, TQ-HOLYWEEK-00, TQ-LENT-00
+--   (ADV-II-00 was the sixth until 2026-11-11, when Dec 17-24 became the
+--   weekday week ADV-II-01 plus kind='date' overlays.)
 --
 -- sort_order = MIN(sort_order) of its days, exactly like a wknum>0 week node.
--- title = the parent subseason's title (so ADV-II-00 = "O Antiphons").
+-- title = the parent subseason's title (so NAT-DAY-00 = "Nativity of the Lord").
 -- This reproduces the 2026-09-16 / 09-21 / 09-26 hand restructure, each step of
 -- which was verified to leave resolution byte-identical.
 --
@@ -82,12 +86,14 @@
 -- RECONCILIATIONS — three places where the naive formula != live truth
 -- ------------------------------------------------------------
 -- R1  OT-OT-01-1 is NOT a real day (Ordinary Time week 1 has no Sunday) but it
---     still CONSUMES RANK() slot 152.  Live day sort_order is therefore 1..394
---     with exactly one gap, at 152, and the OT-OT-01 week node keeps 152.
+--     still CONSUMES RANK() slot 151.  Live day sort_order is therefore 1..394
+--     with exactly one gap, at 151, and the OT-OT-01 week node keeps 151.
+--     (Every ordinal in these notes moved down 1 on 2026-11-11, when ADV-II
+--     went from 8 dated days to 7 weekday days.)
 -- R2  Divine Mercy Sunday is PASC-AD_ASC-02-1 live (Paschaltide reslug), not the
---     formula's PASC-OCT-02-1.  It keeps that slug's sort_order (106) and the
+--     formula's PASC-OCT-02-1.  It keeps that slug's sort_order (105) and the
 --     PASC-OCT-02 week node does not exist.  Week/subseason sort_order is
---     derived BEFORE this reslug, which is why PASC-AD_ASC-02 is 107 and not 106.
+--     derived BEFORE this reslug, which is why PASC-AD_ASC-02 is 106 and not 105.
 -- R3  OT-FOL-00-5 (Immaculate Heart) and OT-FOL-00-6 (BVM, Mother of the
 --     Church) are MEMORIALs; no broad rule covers them.
 --
@@ -200,7 +206,8 @@ CREATE TEMPORARY TABLE tmp_titles (
 -- seq) IS the sort_order contract: it is stable as long as no subseason's
 -- minwk/maxwk/minseq/maxseq changes, and a maxseq bump only shifts days that
 -- sort AFTER the bumped subseason (OT/FOL is last, which is why maxseq 4->5
--- added OT-FOL-00-5 at 394, and 5->6 OT-FOL-00-6 at 395, moving nothing).
+-- added OT-FOL-00-5 at 394, and 5->6 OT-FOL-00-6 at 395, moving nothing; both
+-- are one lower since ADV-II maxseq 8->7 on 2026-11-11 shifted every later day).
 --
 -- The five exclusion predicates are unchanged and are applied BEFORE ranking.
 -- R1/R2 are applied AFTER ranking, in STEP 3, precisely so they do not shift
@@ -249,8 +256,8 @@ FROM filtered;
 
 -- ============================================================
 -- STEP 2: week / subseason / season nodes, derived from the PRE-reconciliation
--- day list (see R2 — this is what keeps PASC-AD_ASC-02 at 107 and OT-OT-01 at
--- 152).  Week nodes now cover wknum=0 too: that is the container layer.
+-- day list (see R2 — this is what keeps PASC-AD_ASC-02 at 106 and OT-OT-01 at
+-- 151).  Week nodes now cover wknum=0 too: that is the container layer.
 -- ============================================================
 
 -- 2a: week nodes, wknum > 0
@@ -299,7 +306,7 @@ FROM tmp_day_raw d
 LEFT JOIN p_liturgical_day_slug_overrides ovr ON ovr.lit_day_id = d.slug;
 
 -- 3a: R1 — Ordinary Time week 1 has no Sunday.  Deleted after ranking, so
---     sort_order 152 stays vacant and every later day keeps its ordinal.
+--     sort_order 151 stays vacant and every later day keeps its ordinal.
 DELETE FROM tmp_epoch_gen WHERE slug = 'OT-OT-01-1';
 
 -- 3b: R2 — the Paschaltide reslug.  Divine Mercy Sunday is the 2nd Sunday of
@@ -400,17 +407,17 @@ WHERE kind='day' AND season='OT' AND subseason='OT' AND seq=1;
 UPDATE tmp_epoch_gen SET rank_code = 'WEEKDAY'
 WHERE kind='day' AND season='OT' AND subseason='OT' AND seq<>1;
 
--- Rule 3: Sundays of Advent I (subseason II has no Sundays)
+-- Rule 3: Sundays of Advent (ADV-II-01-1 is the 4th Sunday since 2026-11-11)
 UPDATE tmp_epoch_gen SET rank_code = 'PRINCIPAL_TEMPORAL'
-WHERE kind='day' AND season='ADV' AND subseason='I' AND seq=1;
+WHERE kind='day' AND season='ADV' AND seq=1;
 
 -- Rule 4: Weekdays of Advent I (before Dec 17)
 UPDATE tmp_epoch_gen SET rank_code = 'WEEKDAY'
 WHERE kind='day' AND season='ADV' AND subseason='I' AND seq<>1;
 
--- Rule 5: Privileged weekdays of Advent II (Dec 17-24, O Antiphons + Dec 24)
+-- Rule 5: Privileged weekdays of Advent II (Dec 17-24 ferias)
 UPDATE tmp_epoch_gen SET rank_code = 'PRIVILEGED_WEEKDAY'
-WHERE kind='day' AND season='ADV' AND subseason='II';
+WHERE kind='day' AND season='ADV' AND subseason='II' AND seq<>1;
 
 -- Rule 6: Sundays of Lent + Palm Sunday (TQ seq=1)
 UPDATE tmp_epoch_gen SET rank_code = 'PRINCIPAL_TEMPORAL'
@@ -552,6 +559,7 @@ INSERT INTO tmp_titles (slug, title) VALUES
     -- observance rather than a stretch of the season: they take the observance
     -- name, not "Nth week of ...".  (PASC-ASC-06 and PASC-PENT-08 are also
     -- single-week but DO use the ordinal form — hence an explicit list, not a rule.)
+    ('ADV-II-01',     'O Antiphons'),
     ('NAT-BAPT-01',   'Baptism of the Lord'),
     ('NAT-OCT-02',    'Solemnity of Mary, Mother of God');
 
@@ -562,7 +570,7 @@ SET g.title = t.title
 WHERE g.title IS NULL;
 
 -- 6b: container week nodes take their parent subseason's title
---     (so ADV-II-00 = 'O Antiphons', NAT-DAY-00 = 'Nativity of the Lord', …)
+--     (so NAT-DAY-00 = 'Nativity of the Lord', …)
 UPDATE tmp_epoch_gen g
 JOIN tmp_titles t ON t.slug = CONCAT(g.season, '-', g.subseason)
 SET g.title = t.title
@@ -598,9 +606,13 @@ WHERE title IS NULL
 -- carry a rank the source table does not agree with, and four titles have been
 -- edited), so STEP 10's refresh must skip them.
 -- ============================================================
+-- proper_of_saints is only a month/day lookup: it also holds the kind='date'
+-- overlay epochs (O-SAPIENTIA .. DEC-24, 2026-11-11), which are curated and
+-- NOT OWNED.  Skip any slug that already exists under another kind.
 INSERT INTO tmp_epoch_gen (slug, kind, title, owns_columns)
 SELECT ps.slug, 'saint', MIN(ps.common_name), 0
 FROM proper_of_saints ps
+WHERE NOT EXISTS (SELECT 1 FROM lit_epoch e WHERE e.slug = ps.slug AND e.kind <> 'saint')
 GROUP BY ps.slug;
 
 -- ============================================================
@@ -611,10 +623,10 @@ GROUP BY ps.slug;
 -- ============================================================
 INSERT INTO tmp_epoch_gen (slug, kind, title, rank_code, season, subseason, wknum, seq, sort_order)
 VALUES
-    ('NAT-DAY-00-0-vigil',  'mass', 'Christmas — Vigil Mass',          'PRINCIPAL_TEMPORAL', 'NAT', 'DAY', 0, 0, 29),
-    ('NAT-DAY-00-0-night',  'mass', 'Christmas — Mass at Night',        'PRINCIPAL_TEMPORAL', 'NAT', 'DAY', 0, 1, 29),
-    ('NAT-DAY-00-0-dawn',   'mass', 'Christmas — Mass at Dawn',         'PRINCIPAL_TEMPORAL', 'NAT', 'DAY', 0, 2, 29),
-    ('NAT-DAY-00-0-day',    'mass', 'Christmas — Mass During the Day',  'PRINCIPAL_TEMPORAL', 'NAT', 'DAY', 0, 3, 29);
+    ('NAT-DAY-00-0-vigil',  'mass', 'Christmas — Vigil Mass',          'PRINCIPAL_TEMPORAL', 'NAT', 'DAY', 0, 0, 28),
+    ('NAT-DAY-00-0-night',  'mass', 'Christmas — Mass at Night',        'PRINCIPAL_TEMPORAL', 'NAT', 'DAY', 0, 1, 28),
+    ('NAT-DAY-00-0-dawn',   'mass', 'Christmas — Mass at Dawn',         'PRINCIPAL_TEMPORAL', 'NAT', 'DAY', 0, 2, 28),
+    ('NAT-DAY-00-0-day',    'mass', 'Christmas — Mass During the Day',  'PRINCIPAL_TEMPORAL', 'NAT', 'DAY', 0, 3, 28);
 
 -- ============================================================
 -- STEP 9: the owned tree edges, into staging.

@@ -165,13 +165,18 @@ def _load_saints(conn, jurisdiction: str) -> list[dict]:
         {slug, common_name, rank_code, sort_order, can_be_transferred,
          month_nominal, day_nominal}
     """
+    # proper_of_saints is only a month/day lookup; which rows compete as
+    # observances is decided by lit_epoch.kind.  kind='date' epochs (e.g.
+    # O-SAPIENTIA, Dec 17) are a dated layer of the temporal day, not observances.
     rows = conn.execute(text("""
         SELECT pos.slug, pos.common_name, pos.rank_code,
                plr.sort_order, plr.can_be_transferred,
                pos.month_nominal, pos.day_nominal
         FROM proper_of_saints pos
+        JOIN lit_epoch le   ON le.slug = pos.slug
         JOIN p_lit_rank plr ON plr.rank_code = pos.rank_code
         WHERE pos.jurisdiction = :jur
+          AND le.kind <> 'date'
         ORDER BY pos.month_nominal, pos.day_nominal, pos.slug
     """), {'jur': jurisdiction}).fetchall()
 
